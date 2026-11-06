@@ -1,10 +1,27 @@
+# Dependencies and generated output
 node_modules/
+.pnpm-store/
 dist/
 coverage/
 artifacts/
 *.tgz
+*.tsbuildinfo
+
+# Local environment files
 .env*
 !.env.example
 !.env.schema
 !.env.local.example
+
+# Package manager debug logs
+npm-debug.log*
+pnpm-debug.log*
+
+# Local IDE files
+.idea/
+*.iml
+
+# macOS metadata
 .DS_Store
+._*
+.AppleDouble/
