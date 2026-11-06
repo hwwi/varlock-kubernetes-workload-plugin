@@ -1,66 +1,101 @@
-name: Publish npm beta
+name: Release npm beta
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      mode:
-        description: 'stage: first registration; publish: OIDC release'
-        required: true
-        type: choice
-        default: publish
-        options:
-          - publish
-          - stage
 permissions:
   contents: read
-concurrency:
-  group: npm-beta-release
-  cancel-in-progress: false
 jobs:
+  release-please:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-please-main
+      cancel-in-progress: false
+      queue: max
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+  dispatch:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Start publishing from the release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          release_run_url=$(gh api --method POST -H "X-GitHub-Api-Version: 2026-03-10" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/dispatches" \
+            --field "ref=$RELEASE_TAG" --field return_run_details=true --jq '.html_url')
+          printf 'Publish workflow: %s\n' "$release_run_url" >> "$GITHUB_STEP_SUMMARY"
+  validate:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Validate the release tag and source commit
+        id: release
+        run: node scripts/release.ts validate
+        env:
+          GH_TOKEN: ${{ github.token }}
   verify:
+    needs: validate
     uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.validate.outputs.sha }}
   publish:
-    needs: verify
+    needs: [validate, verify]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
+    concurrency:
+      group: npm-beta-publish
+      cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version-file: .node-version
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - name: Check beta version
-        run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync } from 'node:fs';
-          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
-          if (!/^\d+\.\d+\.\d+-beta\.\d+$/.test(version)) {
-            throw new Error('This workflow only publishes X.Y.Z-beta.N versions.');
-          }
-          NODE
       - uses: actions/download-artifact@v4
         with:
           name: package-node-24
           path: artifacts
-      - name: Stage first npm beta
-        if: inputs.mode == 'stage'
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo 'Set NPM_TOKEN to a stage-only npm token for the first registration.' >&2
-            exit 1
-          fi
-          npm stage publish ./artifacts/*.tgz --access public --tag beta --provenance --ignore-scripts
-          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
-          The beta is staged, awaiting approval. Open npm's Staged Packages tab and approve it with 2FA.
-          After approval, revoke the temporary token and remove the `NPM_TOKEN` secret.
-          Before the next release, configure the package's Trusted Publisher for `release.yml` and use `mode=publish` with a new beta version.
-          EOF
+      - name: Check the tarball and registry state
+        id: package
+        run: node scripts/release.ts check artifacts
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
       - name: Publish npm beta with OIDC
-        if: inputs.mode == 'publish'
-        run: npm publish ./artifacts/*.tgz --access public --tag beta --provenance --ignore-scripts
+        if: steps.package.outputs.publish == 'true'
+        run: npm publish "$RELEASE_TARBALL" --access public --tag beta --provenance --ignore-scripts
         env:
+          RELEASE_TARBALL: ${{ steps.package.outputs.tarball }}
           NODE_AUTH_TOKEN: ''

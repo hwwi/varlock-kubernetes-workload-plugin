@@ -3,6 +3,12 @@ on:
   push:
   pull_request:
   workflow_call:
+    inputs:
+      ref:
+        description: Commit to verify and package
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: read
 jobs:
@@ -13,6 +19,8 @@ jobs:
         node: ['22.19.0', '24']
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
@@ -31,6 +39,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:

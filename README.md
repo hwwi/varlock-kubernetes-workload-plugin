@@ -83,7 +83,7 @@ The plugin does not infer sensitivity from Secret references.
 ### Individual keys and local names
 
 `k8sWorkloadEnvValue()` reads one variable from the selected container's environment.
-This resolver is available in the source checkout and has not been published to npm yet.
+Requires version 0.1.0-beta.2 or later.
 Use it instead of `@setValuesBulk()` when selecting individual variables or renaming them:
 
 ```dotenv
@@ -241,6 +241,7 @@ pnpm exec varlock load --path ./env --agent
 ## Development
 
 Use Node.js 24.20.0 and pnpm 10.33.4, as configured in the repository.
+Release workflow tests also use Git, tar, and the GitHub CLI (`gh`).
 
 ```sh
 pnpm install --frozen-lockfile
@@ -261,9 +262,14 @@ kind delete cluster --name varlock-workload
 
 These tests create and remove a temporary namespace in the specified kind context.
 
+Use Conventional Commits for changes. release-please prepares a release PR
+with the next beta version and CHANGELOG updates. Merge the PR when ready
+to publish; the release workflow runs all CI checks, including kind
+integration tests, before publishing to npm.
+
 ## Issues and contributions
 
 Report bugs and suggestions in [GitHub Issues](https://github.com/hwwi/varlock-kubernetes-workload-plugin/issues).
 Include your plugin, Varlock, and Node.js versions, OS, and a minimal reproduction with credentials removed.
 
-PRs are welcome. Run the relevant tests and `pnpm check`, and update the README, examples, and changelog when usage changes.
+PRs are welcome. Run the relevant tests and `pnpm check`, and update the README and examples when usage changes.

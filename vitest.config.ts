@@ -6,7 +6,7 @@ export default defineConfig({
       {
         test: {
           name: 'default',
-          include: ['test/environment.test.ts', 'test/plugin.test.ts'],
+          include: ['test/environment.test.ts', 'test/plugin.test.ts', 'test/release.test.ts'],
           testTimeout: 30_000,
         },
       },

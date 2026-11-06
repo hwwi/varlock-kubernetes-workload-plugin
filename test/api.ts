@@ -27,9 +27,10 @@ export async function createApi() {
   const responses = new Map<string, ApiResponse>();
   const requests: { method: string | undefined; path: string; authorization: string | undefined }[] = [];
   const server = http.createServer((request, response) => {
-    const path = new URL(request.url ?? '/', 'http://localhost').pathname;
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    const path = url.pathname;
     requests.push({ method: request.method, path, authorization: request.headers.authorization });
-    const entry = responses.get(path) ?? { status: 404, body: { kind: 'Status', message: 'not found', code: 404 } };
+    const entry = responses.get(`${path}${url.search}`) ?? responses.get(path) ?? { status: 404, body: { kind: 'Status', message: 'not found', code: 404 } };
     const send = () => {
       response.writeHead(entry.status ?? 200, { 'content-type': 'application/json' });
       response.end(JSON.stringify(entry.body));
