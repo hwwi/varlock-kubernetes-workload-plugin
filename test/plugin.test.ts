@@ -170,3 +170,117 @@ test('rejects output inside the input directory, including a symlink alias', asy
   }
   expect(api.requests).toHaveLength(0);
 });
+
+async function scalarFixture(items: string, extraHeader = '') {
+  const result = await fixture(extraHeader, items);
+  const schemaFile = join(result.input, '.env.schema');
+  await writeFile(schemaFile, (await readFile(schemaFile, 'utf8')).replace(
+    '# @setValuesBulk(k8sWorkloadEnv(kind=Deployment, name=app), format=json)\n', '',
+  ));
+  return result;
+}
+
+test('loads individual values with inferred and mapped keys, sharing reads and refreshing the next load', async () => {
+  const { api, input } = await scalarFixture([
+    'VALUE=k8sWorkloadEnvValue(kind=Deployment, name=app)',
+    'LOCAL_TOKEN=k8sWorkloadEnvValue(kind=Deployment, name=app, key=TOKEN)',
+    'TOKEN_COPY=k8sWorkloadEnvValue(kind=Deployment, name=app, key=TOKEN)',
+  ].join('\n'));
+  expect(JSON.parse((await load(input)).stdout)).toEqual({ VALUE: 'cluster', LOCAL_TOKEN: 'fake-secret', TOKEN_COPY: 'fake-secret' });
+  expect(api.requests).toHaveLength(3);
+  api.secret('secret', { TOKEN: 'updated' });
+  expect(JSON.parse((await load(input)).stdout)).toEqual({ VALUE: 'cluster', LOCAL_TOKEN: 'updated', TOKEN_COPY: 'updated' });
+  expect(api.requests).toHaveLength(6);
+});
+
+test('exports individual mappings while ignoring unrelated unsupported and binary values', async () => {
+  const { api, input } = await scalarFixture([
+    'LOCAL_TOKEN=k8sWorkloadEnvValue(kind=Deployment, name=app, key=TOKEN)',
+    '# @required=false',
+    'EMPTY=k8sWorkloadEnvValue(kind=Deployment, name=app)',
+  ].join('\n'));
+  api.workload('Deployment', [{ name: 'app', envFrom: [{ secretRef: { name: 'secret' } }], env: [
+    { name: 'POD_IP', valueFrom: { fieldRef: { fieldPath: 'status.podIP' } } },
+  ] }]);
+  api.responses.set('/api/v1/namespaces/test/secrets/secret', { body: { data: { TOKEN: Buffer.from('mapped').toString('base64'), EMPTY: '', BINARY: '/w==' } } });
+  const output = join(api.directory, '.env.local');
+  await exec(process.execPath, [join(root, 'dist/pull-env.mjs'), input, output]);
+  expect(await readFile(output, 'utf8')).toBe("LOCAL_TOKEN='mapped'\nEMPTY=''\n");
+  expect(api.requests).toHaveLength(2);
+});
+
+test('shares workload and resource reads between bulk and individual resolvers', async () => {
+  const { api, input } = await fixture('', 'VALUE=\nTOKEN=\nLOCAL_TOKEN=k8sWorkloadEnvValue(kind=Deployment, name=app, key=TOKEN)');
+  expect(JSON.parse((await load(input)).stdout)).toEqual({ VALUE: 'cluster', TOKEN: 'fake-secret', LOCAL_TOKEN: 'fake-secret' });
+  expect(api.requests).toHaveLength(3);
+});
+
+test('supports named connections and schema overrides for individual resolvers', async () => {
+  const { api, input } = await scalarFixture('VALUE=k8sWorkloadEnvValue(id=other, kind=Deployment, name=app)',
+    '# @initK8sWorkload(id=other, kubeconfig=PLACEHOLDER, context=other)');
+  const schemaFile = join(input, '.env.schema');
+  await writeFile(schemaFile, (await readFile(schemaFile, 'utf8')).replace('PLACEHOLDER', JSON.stringify(api.kubeconfig)));
+  api.workload('Deployment', [{ name: 'app', env: [{ name: 'VALUE', value: 'other' }] }], 'other');
+  expect(JSON.parse((await load(input)).stdout)).toEqual({ VALUE: 'other' });
+  await writeFile(join(input, '.env.local'), 'VALUE=local\n');
+  expect(JSON.parse((await load(input)).stdout)).toEqual({ VALUE: 'local' });
+});
+
+test.each([
+  { query: 'kind=Deployment, name=app, key=ABSENT', error: 'Environment variable "ABSENT" was not found' },
+  { query: 'kind=Deployment, name=app, key=""', error: 'key must be a non-empty string' },
+  { query: 'kind=Deployment, name=app, typo=true', error: 'Unknown argument "typo"' },
+  { query: 'kind=Pod, name=app', error: 'Unsupported workload kind' },
+  { query: 'kind=Deployment, name=app, container=missing', error: 'Container "missing" was not found' },
+  { query: 'id=missing, kind=Deployment, name=app', error: 'Initialize Kubernetes workload instance "missing"' },
+])('rejects invalid individual queries: $query', async ({ query, error }) => {
+  const { input } = await scalarFixture(`# @required=false\nVALUE=k8sWorkloadEnvValue(${query})`);
+  await expect(load(input)).rejects.toThrow(error);
+});
+
+test('does not reuse resource reads or connection state across loads in the same process', async () => {
+  const { api, input } = await scalarFixture('VALUE=k8sWorkloadEnvValue(kind=Deployment, name=app)');
+  const script = `
+    import { internal } from ${JSON.stringify(join(root, 'node_modules/varlock/dist/index.mjs'))};
+    const values = [];
+    for (let i = 0; i < 2; i++) {
+      const graph = await internal.loadEnvGraph({ basePath: process.argv[1], skipCache: true, checkGitIgnored: false });
+      await graph.resolveEnvValues();
+      values.push(graph.configSchema.VALUE.resolvedValue);
+    }
+    console.log(JSON.stringify(values));
+  `;
+  const result = await exec(process.execPath, ['--input-type=module', '-e', script, input], {
+    cwd: root, env: { ...process.env, DO_NOT_TRACK: '1' },
+  });
+  expect(JSON.parse(result.stdout)).toEqual(['cluster', 'cluster']);
+  expect(api.requests).toHaveLength(6);
+});
+
+test('infers the enclosing config item name inside nested value expressions', async () => {
+  const { api, input } = await scalarFixture([
+    'VALUE=concat("prefix:", k8sWorkloadEnvValue(kind=Deployment, name=app))',
+    'TOKEN_COPY=concat(k8sWorkloadEnvValue(kind=Deployment, name=app, key=TOKEN), ":suffix")',
+  ].join('\n'));
+  expect(JSON.parse((await load(input)).stdout)).toEqual({ VALUE: 'prefix:cluster', TOKEN_COPY: 'fake-secret:suffix' });
+  expect(api.requests).toHaveLength(3);
+});
+
+test('requires an explicit key outside config item value expressions', async () => {
+  const { api, input } = await scalarFixture('VALUE=',
+    '# @setValuesBulk(k8sWorkloadEnvValue(kind=Deployment, name=app), format=json)');
+  await expect(load(input)).rejects.toThrow('requires key outside a config item value expression');
+  expect(api.requests).toHaveLength(0);
+});
+
+test('maps prototype-property source names to safe schema names through the actual CLI', async () => {
+  const { api, input } = await scalarFixture([
+    'LOCAL_PROTO=k8sWorkloadEnvValue(kind=Deployment, name=app, key=__proto__)',
+    'LOCAL_CONSTRUCTOR=k8sWorkloadEnvValue(kind=Deployment, name=app, key=constructor)',
+    'LOCAL_TO_STRING=k8sWorkloadEnvValue(kind=Deployment, name=app, key=toString)',
+  ].join('\n'));
+  api.workload('Deployment', [{ name: 'app', envFrom: [{ secretRef: { name: 'secret' } }] }]);
+  api.secret('secret', Object.fromEntries([['__proto__', 'proto'], ['constructor', 'constructor'], ['toString', 'string']]));
+  expect(JSON.parse((await load(input)).stdout)).toEqual({ LOCAL_PROTO: 'proto', LOCAL_CONSTRUCTOR: 'constructor', LOCAL_TO_STRING: 'string' });
+  expect(api.requests).toHaveLength(2);
+});

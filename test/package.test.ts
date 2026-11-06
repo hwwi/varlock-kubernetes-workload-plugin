@@ -38,6 +38,7 @@ test('installs the tarball and checks release commands on Node 24+', async () =>
       '# @setValuesBulk(k8sWorkloadEnv(kind=Deployment,name=app),format=json)',
       '# ---',
       'PACKAGE_TEST=',
+      'LOCAL_PACKAGE_TEST=k8sWorkloadEnvValue(kind=Deployment, name=app, key=PACKAGE_TEST)',
       '',
     ].join('\n'));
 
@@ -46,7 +47,7 @@ test('installs the tarball and checks release commands on Node 24+', async () =>
       cwd: consumer, env: { ...process.env, DO_NOT_TRACK: '1' }, timeout: 30_000,
     });
     expect(result.stdout).not.toContain('installed-tarball');
-    expect(await readFile(output, 'utf8')).toBe("PACKAGE_TEST='installed-tarball'\n");
+    expect(await readFile(output, 'utf8')).toBe("PACKAGE_TEST='installed-tarball'\nLOCAL_PACKAGE_TEST='installed-tarball'\n");
     expect(api.requests).toHaveLength(1);
     expect(api.requests[0]).toMatchObject({ method: 'GET', path: '/apis/apps/v1/namespaces/test/deployments/app' });
 

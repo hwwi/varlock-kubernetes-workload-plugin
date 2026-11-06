@@ -3,7 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { V1Container, V1EnvVar } from '@kubernetes/client-node';
 import { KubernetesConnection } from '../src/kubernetes.js';
-import { readWorkloadEnvironment } from '../src/environment.js';
+import { readWorkloadEnvironment, WorkloadEnvironmentReader } from '../src/environment.js';
 import { parseWorkloadKind, workloadKinds } from '../src/model.js';
 import { createApi } from './api.js';
 import type { TestApi } from './api.js';
@@ -225,5 +225,105 @@ describe('API failures', () => {
     const started = Date.now();
     await expect(readWorkloadEnvironment(new KubernetesConnection({ kubeconfig: api.kubeconfig, timeoutMs: 30 }), target)).rejects.toMatchObject({ code: 'timeout' });
     expect(Date.now() - started).toBeLessThan(900);
+  });
+});
+
+describe('individual workload environment values', () => {
+  test.each(workloadKinds)('reads a key from %s and ignores unrelated unsupported declarations', async (kind) => {
+    const { api, connection } = await setup();
+    api.workload(kind, [{ name: 'app', env: [
+      { name: 'VALUE', value: 'selected' },
+      { name: 'POD_IP', valueFrom: { fieldRef: { fieldPath: 'status.podIP' } } },
+      { name: 'UNRELATED', valueFrom: { secretKeyRef: { name: 'forbidden', key: 'key' } } },
+    ], envFrom: [{ secretRef: { name: 'forbidden' } }] }]);
+    api.responses.set('/api/v1/namespaces/test/secrets/forbidden', { status: 403, body: {} });
+    await expect(new WorkloadEnvironmentReader(connection).readValue({ kind, name: 'app' }, 'VALUE')).resolves.toBe('selected');
+    expect(api.requests).toHaveLength(1);
+  });
+
+  test('shares in-flight resource reads across keys, containers, workloads, and bulk reads', async () => {
+    const { api, connection } = await setup();
+    api.workload('Deployment', [
+      { name: 'app', envFrom: [{ secretRef: { name: 'shared' }, prefix: 'APP_' }] },
+      { name: 'sidecar', env: [{ name: 'TOKEN', valueFrom: { secretKeyRef: { name: 'shared', key: 'TOKEN' } } }] },
+    ]);
+    api.workload('Deployment', [{ name: 'app', envFrom: [{ secretRef: { name: 'shared' } }] }], 'test', 'second');
+    api.secret('shared', { TOKEN: 'token', EMPTY: '' });
+    const reader = new WorkloadEnvironmentReader(connection);
+    await expect(Promise.all([
+      reader.readValue({ ...target, container: 'app' }, 'APP_TOKEN'),
+      reader.readValue({ ...target, container: 'app' }, 'APP_EMPTY'),
+      reader.readValue({ ...target, container: 'sidecar' }, 'TOKEN'),
+      reader.read({ ...target, container: 'app' }),
+      reader.readValue({ ...target, name: 'second' }, 'TOKEN'),
+    ])).resolves.toEqual(['token', '', 'token', { APP_TOKEN: 'token', APP_EMPTY: '' }, 'token']);
+    expect(api.requests).toHaveLength(3);
+  });
+
+  test('uses final env names, prefixes, source order, and optional fallbacks', async () => {
+    const { api, connection } = await setup({ name: 'app', envFrom: [
+      { configMapRef: { name: 'earlier' }, prefix: 'APP_' },
+      { secretRef: { name: 'later' }, prefix: 'APP_' },
+      { configMapRef: { name: 'unrelated' }, prefix: 'OTHER_' },
+    ], env: [
+      { name: 'APP_VALUE', valueFrom: { secretKeyRef: { name: 'missing', key: 'value', optional: true } } },
+      { name: 'APP_VALUE', valueFrom: { configMapKeyRef: { name: 'earlier', key: 'absent', optional: true } } },
+      { name: 'RENAMED', valueFrom: { configMapKeyRef: { name: 'earlier', key: 'VALUE' } } },
+    ] });
+    api.configMap('earlier', { VALUE: 'earlier', FALLBACK: 'fallback' });
+    api.secret('later', { VALUE: 'later' });
+    const reader = new WorkloadEnvironmentReader(connection);
+    await expect(reader.readValue(target, 'APP_VALUE')).resolves.toBe('later');
+    await expect(reader.readValue(target, 'RENAMED')).resolves.toBe('earlier');
+    await expect(reader.readValue(target, 'APP_FALLBACK')).resolves.toBe('fallback');
+    expect(api.requests.some((r) => r.path.endsWith('/configmaps/unrelated'))).toBe(false);
+    await expect(reader.readValue(target, 'VALUE')).rejects.toThrow('was not found');
+  });
+
+  test('validates only the selected final value and allows prototype source keys to be renamed', async () => {
+    const { api, connection } = await setup({ name: 'app', envFrom: [{ secretRef: { name: 'data' } }] });
+    api.responses.set('/api/v1/namespaces/test/secrets/data', { body: { data: Object.fromEntries([
+      ['TOKEN', Buffer.from('token').toString('base64')], ['BINARY', '/w=='], ['constructor', Buffer.from('safe').toString('base64')],
+    ]) } });
+    const reader = new WorkloadEnvironmentReader(connection);
+    await expect(reader.readValue(target, 'TOKEN')).resolves.toBe('token');
+    await expect(reader.readValue(target, 'constructor')).resolves.toBe('safe');
+    await expect(reader.readValue(target, 'BINARY')).rejects.toThrow('not UTF-8');
+    await expect(reader.read(target)).rejects.toThrow('not UTF-8');
+  });
+
+  test.each([401, 403, 500])('does not hide HTTP %s while locating the selected key', async (status) => {
+    const { api, connection } = await setup({ name: 'app', envFrom: [{ secretRef: { name: 'needed', optional: true } }] });
+    api.responses.set('/api/v1/namespaces/test/secrets/needed', { status, body: {} });
+    await expect(new WorkloadEnvironmentReader(connection).readValue(target, 'VALUE')).rejects.toThrow();
+  });
+
+  test('rejects selected unsupported declarations and required missing references', async () => {
+    const { connection } = await setup({ name: 'app', env: [
+      { name: 'POD_IP', valueFrom: { fieldRef: { fieldPath: 'status.podIP' } } },
+      { name: 'EXPANSION', value: '$(OTHER)' },
+      { name: 'MISSING', valueFrom: { secretKeyRef: { name: 'missing', key: 'key' } } },
+    ] });
+    const reader = new WorkloadEnvironmentReader(connection);
+    await expect(reader.readValue(target, 'POD_IP')).rejects.toMatchObject({ code: 'unsupported' });
+    await expect(reader.readValue(target, 'EXPANSION')).rejects.toMatchObject({ code: 'unsupported' });
+    await expect(reader.readValue(target, 'MISSING')).rejects.toMatchObject({ code: 'not-found' });
+    await expect(reader.readValue(target, 'ABSENT')).rejects.toThrow('was not found');
+  });
+
+  test('keeps workload names and connection namespaces separate and refreshes the next reader', async () => {
+    const { api, connection } = await setup({ name: 'app', envFrom: [{ configMapRef: { name: 'config' } }] });
+    api.configMap('config', { VALUE: 'first' });
+    api.workload('Deployment', [{ name: 'app', env: [{ name: 'VALUE', value: 'second-workload' }] }], 'test', 'second');
+    api.workload('Deployment', [{ name: 'app', envFrom: [{ configMapRef: { name: 'config' } }] }], 'other');
+    api.configMap('config', { VALUE: 'other-namespace' }, {}, 'other');
+    const reader = new WorkloadEnvironmentReader(connection);
+    await expect(reader.readValue(target, 'VALUE')).resolves.toBe('first');
+    await expect(reader.readValue({ ...target, name: 'second' }, 'VALUE')).resolves.toBe('second-workload');
+    const other = new WorkloadEnvironmentReader(new KubernetesConnection({ kubeconfig: api.kubeconfig, namespace: 'other' }));
+    await expect(other.readValue(target, 'VALUE')).resolves.toBe('other-namespace');
+    api.workload('Deployment', [{ name: 'app', envFrom: [{ configMapRef: { name: 'new-hash' } }] }]);
+    api.configMap('new-hash', { VALUE: 'updated' });
+    await expect(new WorkloadEnvironmentReader(connection).readValue(target, 'VALUE')).resolves.toBe('updated');
   });
 });

@@ -80,6 +80,45 @@ Only declared variables are loaded unless you set `createMissing=true` on `@setV
 Mark secrets with `@sensitive`, or use `@defaultSensitive=true`.
 The plugin does not infer sensitivity from Secret references.
 
+### Individual keys and local names
+
+`k8sWorkloadEnvValue()` reads one variable from the selected container's environment.
+This resolver is available in the source checkout and has not been published to npm yet.
+Use it instead of `@setValuesBulk()` when selecting individual variables or renaming them:
+
+```dotenv
+# @plugin(@hwwi/kubernetes-workload-plugin)
+# @initK8sWorkload(context=dev-cluster, namespace=example)
+# @defaultSensitive=true
+# ---
+
+# @type=url @sensitive=false
+API_URL=k8sWorkloadEnvValue(kind=Deployment, name=example-app, container=app)
+
+LOCAL_DATABASE_URL=k8sWorkloadEnvValue(kind=Deployment, name=example-app, container=app, key=DATABASE_URL)
+```
+
+Omitting `key` uses the enclosing schema variable's name (`API_URL` above), including inside nested
+value expressions such as `concat(...)`. An explicit `key` selects the
+workload variable to map to the local name on the left (`DATABASE_URL` → `LOCAL_DATABASE_URL`).
+It is the final container environment name, including any `envFrom.prefix`, not the underlying
+ConfigMap or Secret data key. For example, if `DATABASE_URL` references Secret key `connection-string`,
+use `key=DATABASE_URL`. See the [individual-key schema](examples/individual/.env.schema).
+
+Individual reads follow the same precedence as bulk reads. They inspect matching `env` declarations
+and then `envFrom` sources from highest to lowest priority, stopping when a value is found.
+An unrelated `fieldRef` or binary value does not block the selected key. An unsupported declaration
+or invalid text for the selected value still fails, as do access errors on resources needed to locate it.
+A missing variable is an error even if the schema item has `@required=false`; an empty string is returned unchanged
+and remains subject to Varlock validation.
+
+Kubernetes returns whole ConfigMaps and Secrets, not individual keys. The plugin selects and decodes only
+requested final values. Within one load and connection ID, bulk and individual resolvers share reads of the
+same workload or source resource, including in-flight requests. Several keys from the same Secret require
+one Secret read, even across workloads or containers. Different connection IDs keep separate reads.
+The next load reads current resources again; these shared reads do not use a disk cache or provide key-level RBAC.
+The same file exporter and local override files work with either resolver.
+
 ### Generated files
 
 The exporter writes a plaintext dotenv file with mode `0600`. Failed exports preserve the existing file.
@@ -122,6 +161,17 @@ Direct API server and token arguments are not supported.
 
 Returns a JSON object string for use with `@setValuesBulk(..., format=json)`.
 
+### `k8sWorkloadEnvValue(...)`
+
+Accepts the same arguments as `k8sWorkloadEnv()`, plus:
+
+| Argument | Description |
+| --- | --- |
+| `key` | Final environment variable name in the selected container. Defaults to the enclosing schema item's name within its value expression. Required outside config item value expressions. |
+
+Returns one string. To rename it locally, declare `LOCAL_NAME=k8sWorkloadEnvValue(..., key=WORKLOAD_NAME)`.
+Bulk and individual resolvers can be used together, but bulk resolution still validates the complete merged environment.
+
 ## Supported sources
 
 - `env[].value`
@@ -132,15 +182,16 @@ Returns a JSON object string for use with `@setValuesBulk(..., format=json)`.
 Later `envFrom` entries take precedence. Explicit `env` entries override `envFrom` values.
 ConfigMaps contribute `data` only, not `binaryData`. Secrets are decoded from base64 as UTF-8 text.
 Invalid UTF-8 and NUL bytes in the final merged values cause an error; overridden values and unselected keys are not decoded.
-Resources are cached only within a single resolver call.
+Workload templates and source resources are shared within one load and connection ID, including across resolver calls.
 
-Unsupported declarations cause an error:
+Bulk reads reject the following declarations; individual reads reject them when needed for the selected value:
 
 - `fieldRef`, `resourceFieldRef`, and file-based environment references
 - `$(VAR)` expansion and `$$(VAR)` escaping in direct `env.value` declarations
-- Final variable names matching Object prototype properties, such as `constructor`, `toString`, or `__proto__`
 
-For the last case, use an `envFrom` prefix or map the source key to a different variable name with `valueFrom`.
+Bulk reads also reject final variable names matching Object prototype properties, such as `constructor`,
+`toString`, or `__proto__`. Use an `envFrom` prefix, a different workload variable name through `valueFrom`,
+or map that variable to a safe local name with `k8sWorkloadEnvValue(..., key=constructor)`.
 
 The plugin reads the workload template and its referenced resources; no running Pods are required.
 Resources are read separately and may change during an export. Values may differ from those in an existing Pod.

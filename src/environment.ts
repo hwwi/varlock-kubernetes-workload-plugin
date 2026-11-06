@@ -32,6 +32,12 @@ function decodeSecret(value: string, name: string, key: string): string {
   return textValue(decoded, location);
 }
 
+function decodeValue(value: EnvironmentValue): string {
+  return value.kind === 'secret'
+    ? decodeSecret(value.encoded, value.name, value.key)
+    : textValue(value.value, value.location);
+}
+
 function selectContainer(spec: V1PodSpec, name: string | undefined): V1Container {
   let container: V1Container | undefined;
   if (name) container = spec.containers.find((candidate) => candidate.name === name);
@@ -44,11 +50,23 @@ function selectContainer(spec: V1PodSpec, name: string | undefined): V1Container
   return container;
 }
 
-class EnvironmentSession {
-  // Cache resources only during this resolution, keeping repeated references consistent.
+export class WorkloadEnvironmentReader {
+  // One reader belongs to one initialized connection in a Varlock load. Share in-flight
+  // reads across resolvers without persisting cluster values between loads.
+  private readonly templates = new Map<string, Promise<V1PodSpec>>();
   private readonly resources = new Map<string, Promise<Map<string, string>>>();
 
   constructor(private readonly connection: KubernetesConnection) {}
+
+  private async container(target: WorkloadTarget): Promise<V1Container> {
+    const key = JSON.stringify([target.kind, target.name]);
+    let pending = this.templates.get(key);
+    if (!pending) {
+      pending = this.connection.podSpec(target);
+      this.templates.set(key, pending);
+    }
+    return selectContainer(await pending, target.container);
+  }
 
   private data(kind: SourceKind, name: string): Promise<Map<string, string>> {
     const cacheKey = `${kind}/${name}`;
@@ -77,13 +95,21 @@ class EnvironmentSession {
     }
   }
 
-  private async from(source: V1EnvFromSource, values: Map<string, EnvironmentValue>): Promise<void> {
+  private async from(source: V1EnvFromSource, values: Map<string, EnvironmentValue>, selectedKey?: string): Promise<void> {
     const ref = source.configMapRef ?? source.secretRef;
     if (!ref || (source.configMapRef && source.secretRef)) throw new WorkloadError('unsupported', 'envFrom must reference exactly one ConfigMap or Secret.');
+    const prefix = source.prefix ?? '';
+    if (selectedKey !== undefined && !selectedKey.startsWith(prefix)) return;
     const kind = source.configMapRef ? 'ConfigMap' : 'Secret';
     const data = await this.optionalData(kind, ref.name ?? '', ref.optional);
-    for (const [key, value] of data ?? []) {
-      values.set(`${source.prefix ?? ''}${key}`, referenceValue(kind, ref.name ?? '', key, value));
+    if (selectedKey !== undefined) {
+      const key = selectedKey.slice(prefix.length);
+      const value = data?.get(key);
+      if (value !== undefined) values.set(selectedKey, referenceValue(kind, ref.name ?? '', key, value));
+    } else {
+      for (const [key, value] of data ?? []) {
+        values.set(`${prefix}${key}`, referenceValue(kind, ref.name ?? '', key, value));
+      }
     }
   }
 
@@ -111,7 +137,8 @@ class EnvironmentSession {
     values.set(item.name, referenceValue(kind, name, ref.key, value));
   }
 
-  async resolve(container: V1Container): Promise<Record<string, string>> {
+  async read(target: WorkloadTarget): Promise<Record<string, string>> {
+    const container = await this.container(target);
     const values = new Map<string, EnvironmentValue>();
     for (const source of container.envFrom ?? []) await this.from(source, values);
     for (const item of container.env ?? []) await this.item(item, values);
@@ -121,15 +148,31 @@ class EnvironmentSession {
       if (Object.hasOwn(Object.prototype, key)) {
         throw new WorkloadError('unsupported', `Environment key "${key}" cannot be loaded reliably by Varlock. Rename it or use an envFrom prefix.`);
       }
-      decoded.set(key, value.kind === 'secret'
-        ? decodeSecret(value.encoded, value.name, value.key)
-        : textValue(value.value, value.location));
+      decoded.set(key, decodeValue(value));
     }
     return Object.fromEntries(decoded);
+  }
+
+  async readValue(target: WorkloadTarget, key: string): Promise<string> {
+    const container = await this.container(target);
+    const values = new Map<string, EnvironmentValue>();
+    // Walk precedence backwards so unrelated declarations and shadowed sources
+    // cannot block a selected value. Optional misses leave lower-priority values available.
+    for (const item of (container.env ?? []).toReversed()) {
+      if (item.name !== key) continue;
+      await this.item(item, values);
+      const value = values.get(key);
+      if (value !== undefined) return decodeValue(value);
+    }
+    for (const source of (container.envFrom ?? []).toReversed()) {
+      await this.from(source, values, key);
+      const value = values.get(key);
+      if (value !== undefined) return decodeValue(value);
+    }
+    throw new WorkloadError('not-found', `Environment variable "${key}" was not found in ${target.kind} "${target.name}" container "${container.name}".`);
   }
 }
 
 export async function readWorkloadEnvironment(connection: KubernetesConnection, target: WorkloadTarget): Promise<Record<string, string>> {
-  const spec = await connection.podSpec(target);
-  return new EnvironmentSession(connection).resolve(selectContainer(spec, target.container));
+  return new WorkloadEnvironmentReader(connection).read(target);
 }

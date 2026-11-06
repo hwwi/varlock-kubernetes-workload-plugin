@@ -1,11 +1,12 @@
 import { plugin } from 'varlock/plugin-lib';
 import type { Resolver } from 'varlock/plugin-lib';
 import { KubernetesConnection } from './kubernetes.js';
-import { readWorkloadEnvironment } from './environment.js';
+import { WorkloadEnvironmentReader } from './environment.js';
 import { parseWorkloadKind, WorkloadError } from './model.js';
+import type { WorkloadTarget } from './model.js';
 
 const { SchemaError, ResolutionError } = plugin.ERRORS;
-const connections = new Map<string, KubernetesConnection | undefined>();
+const readers = new Map<string, WorkloadEnvironmentReader | undefined>();
 
 plugin.name = 'kubernetes-workload';
 plugin.icon = 'mdi:kubernetes';
@@ -23,6 +24,29 @@ async function stringArg(resolver: Resolver | undefined, label: string, required
   if (value === undefined && !required) return undefined;
   if (typeof value !== 'string' || !value.trim()) throw new SchemaError(`${label} must be a non-empty string.`);
   return value;
+}
+
+async function workloadTarget(args: Record<string, Resolver> | undefined): Promise<WorkloadTarget> {
+  const kind = await stringArg(args?.kind, 'kind', true);
+  const name = await stringArg(args?.name, 'name', true);
+  if (!kind || !name) throw new SchemaError('kind and name are required.');
+  return {
+    kind: parseWorkloadKind(kind),
+    name,
+    container: await stringArg(args?.container, 'container'),
+  };
+}
+
+function inferItemKey(context: unknown): string {
+  // Varlock 1.24 uses this parent link for its own Kubernetes key inference,
+  // but does not expose it in Resolver's public types. Validate the boundary.
+  if (context && typeof context === 'object' && 'parent' in context) {
+    const parent = context.parent;
+    if (parent && typeof parent === 'object' && 'key' in parent && typeof parent.key === 'string') {
+      return parent.key;
+    }
+  }
+  throw new SchemaError('k8sWorkloadEnvValue() requires key outside a config item value expression.');
 }
 
 function assertArgs(args: Record<string, Resolver> | undefined, allowed: readonly string[]): void {
@@ -48,20 +72,20 @@ plugin.registerRootDecorator({
     if (args.arrArgs?.length) throw new SchemaError('initK8sWorkload() accepts named arguments only.');
     assertArgs(args.objArgs, ['id', 'context', 'namespace', 'kubeconfig', 'timeoutMs']);
     const id = staticId(args.objArgs?.id);
-    if (connections.has(id)) throw new SchemaError(`Kubernetes workload instance "${id}" is already initialized.`);
-    connections.set(id, undefined);
+    if (readers.has(id)) throw new SchemaError(`Kubernetes workload instance "${id}" is already initialized.`);
+    readers.set(id, undefined);
     return { id, args: args.objArgs };
   },
   async execute({ id, args }) {
     try {
       const rawTimeout: unknown = await args?.timeoutMs?.resolve();
       if (rawTimeout !== undefined && typeof rawTimeout !== 'number') throw new SchemaError('timeoutMs must be a number.');
-      connections.set(id, new KubernetesConnection({
+      readers.set(id, new WorkloadEnvironmentReader(new KubernetesConnection({
         context: await stringArg(args?.context, 'context'),
         namespace: await stringArg(args?.namespace, 'namespace'),
         kubeconfig: await stringArg(args?.kubeconfig, 'kubeconfig'),
         timeoutMs: rawTimeout,
-      }));
+      })));
     } catch (error) { report(error); }
   },
 });
@@ -73,21 +97,36 @@ plugin.registerResolverFunction({
   process() {
     assertArgs(this.objArgs, ['id', 'kind', 'name', 'container']);
     const id = staticId(this.objArgs?.id);
-    if (!connections.has(id)) throw new SchemaError(`Initialize Kubernetes workload instance "${id}" with @initK8sWorkload() first.`);
+    if (!readers.has(id)) throw new SchemaError(`Initialize Kubernetes workload instance "${id}" with @initK8sWorkload() first.`);
     return { id, args: this.objArgs };
   },
   async resolve({ id, args }) {
     try {
-      const connection = connections.get(id);
-      if (!connection) throw new SchemaError(`Kubernetes workload instance "${id}" is not initialized.`);
-      const kind = await stringArg(args?.kind, 'kind', true);
-      const name = await stringArg(args?.name, 'name', true);
-      if (!kind || !name) throw new SchemaError('kind and name are required.');
-      return JSON.stringify(await readWorkloadEnvironment(connection, {
-        kind: parseWorkloadKind(kind),
-        name,
-        container: await stringArg(args?.container, 'container'),
-      }));
+      const reader = readers.get(id);
+      if (!reader) throw new SchemaError(`Kubernetes workload instance "${id}" is not initialized.`);
+      return JSON.stringify(await reader.read(await workloadTarget(args)));
+    } catch (error) { report(error); }
+  },
+});
+
+plugin.registerResolverFunction({
+  name: 'k8sWorkloadEnvValue',
+  label: 'Read one environment variable from a Kubernetes workload template',
+  argsSchema: { type: 'mixed', arrayMinLength: 0, arrayMaxLength: 0 },
+  process() {
+    assertArgs(this.objArgs, ['id', 'kind', 'name', 'container', 'key']);
+    const id = staticId(this.objArgs?.id);
+    if (!readers.has(id)) throw new SchemaError(`Initialize Kubernetes workload instance "${id}" with @initK8sWorkload() first.`);
+    const inferredKey = this.objArgs?.key ? undefined : inferItemKey(this);
+    return { id, args: this.objArgs, inferredKey };
+  },
+  async resolve({ id, args, inferredKey }) {
+    try {
+      const reader = readers.get(id);
+      if (!reader) throw new SchemaError(`Kubernetes workload instance "${id}" is not initialized.`);
+      const key = args?.key ? await stringArg(args.key, 'key', true) : inferredKey;
+      if (!key) throw new SchemaError('key is required.');
+      return await reader.readValue(await workloadTarget(args), key);
     } catch (error) { report(error); }
   },
 });
