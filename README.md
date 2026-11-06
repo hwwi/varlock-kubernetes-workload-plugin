@@ -251,6 +251,7 @@ pnpm test:package
 
 `check` runs type checking, builds, and tests, including the actual Varlock CLI and Next.js 16.2.6 env loader.
 `test:package` installs a tarball in a separate project and checks the packaged plugin and CLI.
+CI skips tests for changes limited to `README.md`, `AGENTS.md`, and `docs/`; release validation always runs all checks.
 
 For Kubernetes integration tests, use a temporary kind cluster:
 

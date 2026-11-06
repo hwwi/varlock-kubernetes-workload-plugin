@@ -44,6 +44,8 @@ Use the Node.js version in `.node-version` and pnpm version in `package.json`. I
 - Communicate with the user in Korean. Write public documentation, code comments, and commit messages in English.
 - Use Conventional Commits. Keep README examples generic and documentation proportional to this small plugin.
 - Let release-please update release versions and the changelog through its release PR; do not manually bump them unless requested.
+- Keep the `CI result` check running for documentation-only changes. Release callers must set `full-check: true` to bypass path filtering.
+- Use the GitHub App token only in the release-please job; keep dispatch authentication and npm OIDC separate.
 - Preserve the release gate: full reusable CI, including kind integration tests, must pass before npm publishing.
 - The `release.yml` workflow filename is part of the npm trusted publisher configuration. Coordinate any rename with that configuration.
 - Commit, push, publish, or change external settings only when authorized by the user.

@@ -1,9 +1,15 @@
 name: CI
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_call:
     inputs:
+      full-check:
+        description: Run all checks regardless of changed paths
+        type: boolean
+        required: false
+        default: false
       ref:
         description: Commit to verify and package
         type: string
@@ -12,7 +18,27 @@ on:
 permissions:
   contents: read
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      run-tests: ${{ steps.changes.outputs.run-tests }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Decide whether tests are needed
+        id: changes
+        run: node scripts/ci-changes.ts
+        env:
+          CI_FULL_CHECK: ${{ inputs.full-check || false }}
   check:
+    needs: changes
+    if: needs.changes.outputs.run-tests == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -36,6 +62,8 @@ jobs:
           path: artifacts/*.tgz
           if-no-files-found: error
   kubernetes:
+    needs: changes
+    if: needs.changes.outputs.run-tests == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -54,3 +82,22 @@ jobs:
       - run: pnpm test:cluster
         env:
           WORKLOAD_TEST_CONTEXT: kind-varlock-workload
+  result:
+    name: CI result
+    if: always()
+    needs: [changes, check, kubernetes]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required job results
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          RUN_TESTS: ${{ needs.changes.outputs.run-tests }}
+          CHECK_RESULT: ${{ needs.check.result }}
+          KUBERNETES_RESULT: ${{ needs.kubernetes.result }}
+        run: |
+          [[ "$CHANGES_RESULT" == success ]] || exit 1
+          if [[ "$RUN_TESTS" == true ]]; then
+            [[ "$CHECK_RESULT" == success && "$KUBERNETES_RESULT" == success ]]
+          else
+            [[ "$RUN_TESTS" == false && "$CHECK_RESULT" == skipped && "$KUBERNETES_RESULT" == skipped ]]
+          fi
