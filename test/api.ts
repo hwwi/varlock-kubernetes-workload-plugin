@@ -40,10 +40,11 @@ export async function createApi() {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   if (typeof address !== 'object' || !address) throw new Error('No test server address');
+  const serverUrl = `http://127.0.0.1:${address.port}`;
   const kubeconfig = join(directory, 'kubeconfig.json');
   await writeFile(kubeconfig, JSON.stringify({
     apiVersion: 'v1', kind: 'Config',
-    clusters: [{ name: 'test', cluster: { server: `http://127.0.0.1:${address.port}`, 'insecure-skip-tls-verify': true } }],
+    clusters: [{ name: 'test', cluster: { server: serverUrl, 'insecure-skip-tls-verify': true } }],
     users: [{ name: 'test', user: { token: 'test-token' } }],
     contexts: [
       { name: 'test', context: { cluster: 'test', user: 'test', namespace: 'test' } },
@@ -53,7 +54,7 @@ export async function createApi() {
   }));
 
   return {
-    directory, kubeconfig, requests, responses,
+    directory, kubeconfig, serverUrl, requests, responses,
     openConnections(): Promise<number> {
       return new Promise((resolve, reject) => server.getConnections((error, count) => error ? reject(error) : resolve(count)));
     },

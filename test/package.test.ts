@@ -8,7 +8,7 @@ import { createApi } from './api.js';
 const exec = promisify(execFile);
 const root = resolve(import.meta.dirname, '..');
 
-test('installs a tarball in a separate project and runs the packaged plugin and CLI', async () => {
+test('installs the tarball and checks release commands on Node 24+', async () => {
   const api = await createApi();
   try {
     api.workload('Deployment', [{ name: 'app', env: [{ name: 'PACKAGE_TEST', value: 'installed-tarball' }] }]);
@@ -49,6 +49,32 @@ test('installs a tarball in a separate project and runs the packaged plugin and 
     expect(await readFile(output, 'utf8')).toBe("PACKAGE_TEST='installed-tarball'\n");
     expect(api.requests).toHaveLength(1);
     expect(api.requests[0]).toMatchObject({ method: 'GET', path: '/apis/apps/v1/namespaces/test/deployments/app' });
+
+    // The release job uses Node 24; Node 22's bundled npm has no staging command.
+    if (Number(process.versions.node.split('.')[0]) < 24) return;
+    // Exercise the workflow commands without rewriting their relative tarball paths.
+    const workflow = await readFile(join(root, '.github/workflows/release.yml'), 'utf8');
+    const publishCommands = workflow.split('\n').map((line) => line.trim().replace(/^run:\s*/, ''))
+      .filter((line) => /^npm (?:stage )?publish /.test(line));
+    expect(publishCommands).toHaveLength(2);
+    const npmrc = join(api.directory, 'empty.npmrc');
+    await writeFile(npmrc, '');
+    for (const command of publishCommands) {
+      const result = await exec('bash', ['-e', '-c', `${command} --dry-run --json --registry "$TEST_NPM_REGISTRY" --userconfig "$TEST_NPM_USERCONFIG" --cache "$TEST_NPM_CACHE"`], {
+        cwd: api.directory,
+        env: {
+          ...process.env, NODE_AUTH_TOKEN: '', GIT_SSH_COMMAND: 'false',
+          TEST_NPM_REGISTRY: api.serverUrl, TEST_NPM_USERCONFIG: npmrc,
+          TEST_NPM_CACHE: join(api.directory, 'npm-cache'),
+        },
+        timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
+      });
+      const publication: unknown = JSON.parse(result.stdout);
+      const packageName = '@hwwi/kubernetes-workload-plugin';
+      expect(publication).toMatchObject({ [packageName]: { name: packageName } });
+      expect(result.stderr).toContain('tag beta and public access (dry-run)');
+    }
+    expect(api.requests.every((request) => request.method === 'GET')).toBe(true);
   } finally {
     await api.close();
   }

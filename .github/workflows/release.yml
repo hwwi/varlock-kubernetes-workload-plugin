@@ -51,7 +51,7 @@ jobs:
             echo 'Set NPM_TOKEN to a stage-only npm token for the first registration.' >&2
             exit 1
           fi
-          npm stage publish artifacts/*.tgz --access public --tag beta --provenance --ignore-scripts
+          npm stage publish ./artifacts/*.tgz --access public --tag beta --provenance --ignore-scripts
           cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
           The beta is staged, awaiting approval. Open npm's Staged Packages tab and approve it with 2FA.
           After approval, revoke the temporary token and remove the `NPM_TOKEN` secret.
@@ -61,6 +61,6 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish npm beta with OIDC
         if: inputs.mode == 'publish'
-        run: npm publish artifacts/*.tgz --access public --tag beta --provenance --ignore-scripts
+        run: npm publish ./artifacts/*.tgz --access public --tag beta --provenance --ignore-scripts
         env:
           NODE_AUTH_TOKEN: ''
