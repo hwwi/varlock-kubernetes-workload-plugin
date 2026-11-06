@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-beta.2](https://github.com/hwwi/varlock-kubernetes-workload-plugin/compare/v0.1.0-beta.1...v0.1.0-beta.2) (2026-11-06)
+
+
+### Features
+
+* add individual workload environment lookups ([fe3c11c](https://github.com/hwwi/varlock-kubernetes-workload-plugin/commit/fe3c11c2f0f29a5390fc55faf4d24c348314545e))
+
 ## 0.1.0-beta.1
 
 - Read container environment variables from Deployment, StatefulSet, DaemonSet, Job, and CronJob templates.
