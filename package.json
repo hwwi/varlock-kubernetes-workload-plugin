@@ -1,0 +1,61 @@
+{
+  "name": "@hwwi/kubernetes-workload-plugin",
+  "version": "0.1.0-beta.1",
+  "description": "Varlock plugin for environment variables declared in Kubernetes workload templates",
+  "type": "module",
+  "license": "MIT",
+  "author": "hwwi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hwwi/varlock-kubernetes-workload-plugin.git"
+  },
+  "bugs": "https://github.com/hwwi/varlock-kubernetes-workload-plugin/issues",
+  "homepage": "https://github.com/hwwi/varlock-kubernetes-workload-plugin#readme",
+  "packageManager": "pnpm@10.33.4",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "exports": {
+    "./plugin": "./dist/plugin.cjs"
+  },
+  "bin": {
+    "varlock-workload-pull": "./dist/pull-env.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "varlock",
+    "varlock-plugin",
+    "kubernetes",
+    "dotenv",
+    "workload",
+    "secrets",
+    "configmap"
+  ],
+  "scripts": {
+    "build": "tsdown && node scripts/bundle-licenses.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm build && vitest run --project default",
+    "check": "pnpm typecheck && pnpm test",
+    "prepack": "pnpm build",
+    "test:cluster": "pnpm build && vitest run --project cluster",
+    "test:package": "vitest run --project package"
+  },
+  "peerDependencies": {
+    "varlock": ">=1.24.0 <1.25.0"
+  },
+  "devDependencies": {
+    "@kubernetes/client-node": "2.0.2",
+    "@next/env": "16.2.6",
+    "@types/node": "^22.18.0",
+    "tsdown": "0.23.7",
+    "typescript": "~6.0.0",
+    "varlock": "1.24.0",
+    "vitest": "5.1.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "beta"
+  }
+}

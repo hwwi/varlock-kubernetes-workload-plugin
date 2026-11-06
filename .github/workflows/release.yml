@@ -1,0 +1,66 @@
+name: Publish npm beta
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'stage: first registration; publish: OIDC release'
+        required: true
+        type: choice
+        default: publish
+        options:
+          - publish
+          - stage
+permissions:
+  contents: read
+concurrency:
+  group: npm-beta-release
+  cancel-in-progress: false
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Check beta version
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (!/^\d+\.\d+\.\d+-beta\.\d+$/.test(version)) {
+            throw new Error('This workflow only publishes X.Y.Z-beta.N versions.');
+          }
+          NODE
+      - uses: actions/download-artifact@v4
+        with:
+          name: package-node-24
+          path: artifacts
+      - name: Stage first npm beta
+        if: inputs.mode == 'stage'
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo 'Set NPM_TOKEN to a stage-only npm token for the first registration.' >&2
+            exit 1
+          fi
+          npm stage publish artifacts/*.tgz --access public --tag beta --provenance --ignore-scripts
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          The beta is staged, awaiting approval. Open npm's Staged Packages tab and approve it with 2FA.
+          After approval, revoke the temporary token and remove the `NPM_TOKEN` secret.
+          Before the next release, configure the package's Trusted Publisher for `release.yml` and use `mode=publish` with a new beta version.
+          EOF
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish npm beta with OIDC
+        if: inputs.mode == 'publish'
+        run: npm publish artifacts/*.tgz --access public --tag beta --provenance --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ''
