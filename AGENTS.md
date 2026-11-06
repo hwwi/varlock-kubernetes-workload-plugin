@@ -8,6 +8,7 @@ Keep changes focused on the plugin, its dotenv exporter, and their existing cont
 - Read workload Pod templates and their referenced ConfigMaps and Secrets through read-only Kubernetes API calls.
 - Do not substitute running Pod state, Pod exec, or image environment variables for template values.
 - Preserve Kubernetes precedence: later `envFrom` sources win, and explicit `env` entries override them.
+- `allowMissing` only permits an absent final environment variable in individual reads. Missing workloads and broken required source references still fail.
 - Optional missing resources or keys retain lower-priority values. Authentication, permission, and connection errors still fail.
 - Share resource reads, including in-flight requests, within one initialized connection per Varlock load. Do not persist cluster values between loads.
 - Decode and validate values being returned; unrelated or overridden values should not break an individual key lookup.

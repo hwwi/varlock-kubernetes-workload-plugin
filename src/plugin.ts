@@ -3,10 +3,18 @@ import type { Resolver } from 'varlock/plugin-lib';
 import { KubernetesConnection } from './kubernetes.js';
 import { WorkloadEnvironmentReader } from './environment.js';
 import { parseWorkloadKind, WorkloadError } from './model.js';
-import type { WorkloadTarget } from './model.js';
+import type { WorkloadKind, WorkloadTarget } from './model.js';
 
 const { SchemaError, ResolutionError } = plugin.ERRORS;
-const readers = new Map<string, WorkloadEnvironmentReader | undefined>();
+interface WorkloadInstance {
+  reader: WorkloadEnvironmentReader;
+  defaultKind: WorkloadKind | undefined;
+  defaultName: string | undefined;
+  defaultContainer: string | undefined;
+  allowMissing: boolean;
+}
+
+const instances = new Map<string, WorkloadInstance | undefined>();
 
 plugin.name = 'kubernetes-workload';
 plugin.icon = 'mdi:kubernetes';
@@ -26,14 +34,21 @@ async function stringArg(resolver: Resolver | undefined, label: string, required
   return value;
 }
 
-async function workloadTarget(args: Record<string, Resolver> | undefined): Promise<WorkloadTarget> {
-  const kind = await stringArg(args?.kind, 'kind', true);
-  const name = await stringArg(args?.name, 'name', true);
+async function booleanArg(resolver: Resolver | undefined, label: string): Promise<boolean | undefined> {
+  const value: unknown = await resolver?.resolve();
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') throw new SchemaError(`${label} must be a boolean.`);
+  return value;
+}
+
+async function workloadTarget(args: Record<string, Resolver> | undefined, instance: WorkloadInstance): Promise<WorkloadTarget> {
+  const kind = args?.kind ? await stringArg(args.kind, 'kind', true) : instance.defaultKind;
+  const name = args?.name ? await stringArg(args.name, 'name', true) : instance.defaultName;
   if (!kind || !name) throw new SchemaError('kind and name are required.');
   return {
     kind: parseWorkloadKind(kind),
     name,
-    container: await stringArg(args?.container, 'container'),
+    container: args?.container ? await stringArg(args.container, 'container', true) : instance.defaultContainer,
   };
 }
 
@@ -70,22 +85,30 @@ plugin.registerRootDecorator({
   isFunction: true,
   process(args) {
     if (args.arrArgs?.length) throw new SchemaError('initK8sWorkload() accepts named arguments only.');
-    assertArgs(args.objArgs, ['id', 'context', 'namespace', 'kubeconfig', 'timeoutMs']);
+    assertArgs(args.objArgs, ['id', 'context', 'namespace', 'kubeconfig', 'timeoutMs', 'defaultKind', 'defaultName', 'defaultContainer', 'allowMissing']);
     const id = staticId(args.objArgs?.id);
-    if (readers.has(id)) throw new SchemaError(`Kubernetes workload instance "${id}" is already initialized.`);
-    readers.set(id, undefined);
+    if (instances.has(id)) throw new SchemaError(`Kubernetes workload instance "${id}" is already initialized.`);
+    instances.set(id, undefined);
     return { id, args: args.objArgs };
   },
   async execute({ id, args }) {
     try {
       const rawTimeout: unknown = await args?.timeoutMs?.resolve();
       if (rawTimeout !== undefined && typeof rawTimeout !== 'number') throw new SchemaError('timeoutMs must be a number.');
-      readers.set(id, new WorkloadEnvironmentReader(new KubernetesConnection({
+      const defaultKind = await stringArg(args?.defaultKind, 'defaultKind');
+      const defaults = {
+        defaultKind: defaultKind === undefined ? undefined : parseWorkloadKind(defaultKind),
+        defaultName: await stringArg(args?.defaultName, 'defaultName'),
+        defaultContainer: await stringArg(args?.defaultContainer, 'defaultContainer'),
+        allowMissing: await booleanArg(args?.allowMissing, 'allowMissing') ?? false,
+      };
+      const connection = new KubernetesConnection({
         context: await stringArg(args?.context, 'context'),
         namespace: await stringArg(args?.namespace, 'namespace'),
         kubeconfig: await stringArg(args?.kubeconfig, 'kubeconfig'),
         timeoutMs: rawTimeout,
-      })));
+      });
+      instances.set(id, { ...defaults, reader: new WorkloadEnvironmentReader(connection) });
     } catch (error) { report(error); }
   },
 });
@@ -97,14 +120,14 @@ plugin.registerResolverFunction({
   process() {
     assertArgs(this.objArgs, ['id', 'kind', 'name', 'container']);
     const id = staticId(this.objArgs?.id);
-    if (!readers.has(id)) throw new SchemaError(`Initialize Kubernetes workload instance "${id}" with @initK8sWorkload() first.`);
+    if (!instances.has(id)) throw new SchemaError(`Initialize Kubernetes workload instance "${id}" with @initK8sWorkload() first.`);
     return { id, args: this.objArgs };
   },
   async resolve({ id, args }) {
     try {
-      const reader = readers.get(id);
-      if (!reader) throw new SchemaError(`Kubernetes workload instance "${id}" is not initialized.`);
-      return JSON.stringify(await reader.read(await workloadTarget(args)));
+      const instance = instances.get(id);
+      if (!instance) throw new SchemaError(`Kubernetes workload instance "${id}" is not initialized.`);
+      return JSON.stringify(await instance.reader.read(await workloadTarget(args, instance)));
     } catch (error) { report(error); }
   },
 });
@@ -114,19 +137,20 @@ plugin.registerResolverFunction({
   label: 'Read one environment variable from a Kubernetes workload template',
   argsSchema: { type: 'mixed', arrayMinLength: 0, arrayMaxLength: 0 },
   process() {
-    assertArgs(this.objArgs, ['id', 'kind', 'name', 'container', 'key']);
+    assertArgs(this.objArgs, ['id', 'kind', 'name', 'container', 'key', 'allowMissing']);
     const id = staticId(this.objArgs?.id);
-    if (!readers.has(id)) throw new SchemaError(`Initialize Kubernetes workload instance "${id}" with @initK8sWorkload() first.`);
+    if (!instances.has(id)) throw new SchemaError(`Initialize Kubernetes workload instance "${id}" with @initK8sWorkload() first.`);
     const inferredKey = this.objArgs?.key ? undefined : inferItemKey(this);
     return { id, args: this.objArgs, inferredKey };
   },
   async resolve({ id, args, inferredKey }) {
     try {
-      const reader = readers.get(id);
-      if (!reader) throw new SchemaError(`Kubernetes workload instance "${id}" is not initialized.`);
+      const instance = instances.get(id);
+      if (!instance) throw new SchemaError(`Kubernetes workload instance "${id}" is not initialized.`);
       const key = args?.key ? await stringArg(args.key, 'key', true) : inferredKey;
       if (!key) throw new SchemaError('key is required.');
-      return await reader.readValue(await workloadTarget(args), key);
+      const allowMissing = await booleanArg(args?.allowMissing, 'allowMissing') ?? instance.allowMissing;
+      return await instance.reader.readValue(await workloadTarget(args, instance), key, allowMissing);
     } catch (error) { report(error); }
   },
 });

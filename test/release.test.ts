@@ -6,55 +6,66 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, test } from 'vitest';
-import { betaVersion, compareBeta, publicationDecision } from '../scripts/release.js';
+import { releaseVersion, compareReleaseToLatest, publicationDecision } from '../scripts/release.js';
 import { createApi } from './api.js';
 import type { TestApi } from './api.js';
 
 const exec = promisify(execFile);
 const script = resolve(import.meta.dirname, '../scripts/release.ts');
 const name = '@hwwi/kubernetes-workload-plugin';
-const version = '0.1.0-beta.2';
+const version = '0.1.0';
 const releasePath = `/repos/hwwi/varlock-kubernetes-workload-plugin/releases/tags/v${version}`;
 const registryPath = `/${encodeURIComponent(name)}`;
 const activeApis: TestApi[] = [];
 afterEach(async () => { await Promise.all(activeApis.splice(0).map((api) => api.close())); });
 
-function registry(beta = '0.1.0-beta.1', versions: Record<string, unknown> = {}) {
-  return { 'dist-tags': { beta }, versions };
+function registry(latest = '0.0.0-stage', versions: Record<string, unknown> = {}) {
+  return { 'dist-tags': { latest }, versions };
 }
 
-describe('beta publication decisions', () => {
+describe('release publication decisions', () => {
   test.each([
-    ['0.1.0-beta.9', '0.1.0-beta.10', -1],
-    ['0.2.0-beta.1', '0.1.99-beta.99', 1],
-    ['0.1.0-beta.2', '0.1.0-beta.2', 0],
-    ['0.1.0-beta.99999999999999999999', '0.1.0-beta.99999999999999999998', 1],
-  ])('compares %s and %s numerically', (left, right, expected) => {
-    if (typeof left !== 'string' || typeof right !== 'string') throw new Error('Invalid test case');
-    expect(compareBeta(left, right)).toBe(expected);
+    ['0.1.0', '0.0.0-stage', 1],
+    ['0.1.0', '0.1.0-beta.2', 1],
+    ['0.1.0', '0.1.0-beta.99999999999999999999', 1],
+    ['0.1.0', '0.1.0', 0],
+    ['0.1.0', '0.1.0+build.1', 0],
+    ['0.1.0', '0.1.1', -1],
+    ['0.1.0', '0.2.0-beta.1', -1],
+    ['1.0.0', '0.99.99', 1],
+    ['0.1.10', '0.1.9', 1],
+  ])('compares release %s against latest %s', (candidate, latest, expected) => {
+    if (typeof candidate !== 'string' || typeof latest !== 'string') throw new Error('Invalid test case');
+    expect(compareReleaseToLatest(candidate, latest)).toBe(expected);
   });
 
-  test.each(['1.0.0', 'v0.1.0-beta.1', '0.1.0-alpha.1', '0.1.0-beta', '0.1.0-beta.01', '00.1.0-beta.1', '9007199254740992.0.0-beta.1'])('rejects unsupported version %s', (value) => {
-    expect(() => betaVersion(value)).toThrow();
+  test.each(['v0.1.0', '0.1.0-beta.1', '0.1.0-alpha.1', '0.1.0+build', '0.1', '0.1.0\n', '00.1.0', '9007199254740992.0.0'])('rejects unsupported release %s', (value) => {
+    expect(() => releaseVersion(value)).toThrow();
+    expect(() => publicationDecision(undefined, value, 'sha512-new')).toThrow();
   });
 
-  test('publishes only a new version ahead of beta', () => {
+  test.each(['0.1.0-beta.01', '0.1.0-', '0.1.0-stage\n', '0.1.0+build..1', 'v0.1.0', '9007199254740992.0.0'])('rejects invalid latest version %s', (latest) => {
+    expect(() => compareReleaseToLatest(version, latest)).toThrow();
+  });
+
+  test('publishes a new release ahead of latest without depending on beta', () => {
     expect(publicationDecision(undefined, version, 'sha512-new')).toBe(true);
     expect(publicationDecision(registry(), version, 'sha512-new')).toBe(true);
-    expect(() => publicationDecision(registry('0.1.0-beta.3'), version, 'sha512-new')).toThrow('backwards');
+    expect(publicationDecision({ versions: {}, 'dist-tags': { beta: '9.0.0-beta.1' } }, version, 'sha512-new')).toBe(true);
+    expect(() => publicationDecision(registry('0.1.1'), version, 'sha512-new')).toThrow('backwards');
     expect(() => publicationDecision(registry(version), version, 'sha512-new')).toThrow('backwards');
   });
 
-  test('skips an identical published tarball without changing a newer beta', () => {
-    const metadata = registry('0.1.0-beta.3', { [version]: { name, version, dist: { integrity: 'sha512-same' } } });
+  test('skips an identical published tarball without changing a newer latest', () => {
+    const metadata = registry('0.1.1', { [version]: { name, version, dist: { integrity: 'sha512-same' } } });
     expect(publicationDecision(metadata, version, 'sha512-same')).toBe(false);
     expect(() => publicationDecision(metadata, version, 'sha512-different')).toThrow('integrity');
   });
 
   test.each([
     null,
-    { versions: {}, 'dist-tags': { beta: 123 } },
-    registry('0.1.0-beta.1', { [version]: { name: 'wrong-package', version, dist: { integrity: 'sha512-same' } } }),
+    { versions: {}, 'dist-tags': { latest: 123 } },
+    registry('0.0.0-stage', { [version]: { name: 'wrong-package', version, dist: { integrity: 'sha512-same' } } }),
   ])('rejects invalid registry metadata %#', (metadata) => {
     expect(() => publicationDecision(metadata, version, 'sha512-same')).toThrow();
   });
@@ -73,7 +84,7 @@ async function fixture(manifestVersion = version, tarballVersion = version) {
   await exec('git', ['init', '-q', '-b', 'main'], { cwd });
   await exec('git', ['config', 'core.hooksPath', '/dev/null'], { cwd });
   await exec('git', ['add', 'package.json', '.release-please-manifest.json'], { cwd });
-  await exec('git', ['-c', 'user.name=Release Test', '-c', 'user.email=release@example.test', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'chore: release beta'], { cwd });
+  await exec('git', ['-c', 'user.name=Release Test', '-c', 'user.email=release@example.test', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'chore: release'], { cwd });
   const sha = (await exec('git', ['rev-parse', 'HEAD'], { cwd })).stdout.trim();
   await exec('git', ['tag', `v${version}`], { cwd });
   await exec('git', ['update-ref', 'refs/remotes/origin/main', sha], { cwd });
@@ -82,7 +93,7 @@ async function fixture(manifestVersion = version, tarballVersion = version) {
   await exec('tar', ['-czf', tarball, '-C', join(api.directory, 'tarball'), 'package']);
   const integrity = `sha512-${createHash('sha512').update(await readFile(tarball)).digest('base64')}`;
   const output = join(api.directory, 'output');
-  api.responses.set(releasePath, { body: { tag_name: `v${version}`, draft: false, prerelease: true } });
+  api.responses.set(releasePath, { body: { tag_name: `v${version}`, draft: false, prerelease: false } });
   api.responses.set(registryPath, { body: registry() });
   const env = {
     ...process.env,
@@ -108,17 +119,17 @@ test('validates a real git tag and checks the actual archive through read-only H
   expect(f.api.requests.find((request) => request.path === releasePath)?.authorization).toBe('Bearer fake-token');
 });
 
-test('rejects an older beta using fresh metadata even when the cached response permits it', async () => {
+test('rejects an older release using fresh metadata even when the cached response permits it', async () => {
   const f = await fixture();
-  f.api.responses.set(registryPath, { body: registry('0.1.0-beta.1') });
-  f.api.responses.set(`${registryPath}?write=true`, { body: registry('0.1.0-beta.3') });
+  f.api.responses.set(registryPath, { body: registry('0.0.0-stage') });
+  f.api.responses.set(`${registryPath}?write=true`, { body: registry('0.1.1') });
   await expect(f.run()).rejects.toThrow('backwards');
   await expect(readFile(f.output)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
 test('recognizes an identical published archive missing from cached metadata', async () => {
   const f = await fixture();
-  f.api.responses.set(registryPath, { body: registry('0.1.0-beta.1') });
+  f.api.responses.set(registryPath, { body: registry('0.0.0-stage') });
   f.api.responses.set(`${registryPath}?write=true`, { body: registry(version, {
     [version]: { name, version, dist: { integrity: f.integrity } },
   }) });
@@ -128,7 +139,7 @@ test('recognizes an identical published archive missing from cached metadata', a
 
 test('skips a previously published identical archive on retry', async () => {
   const f = await fixture();
-  f.api.responses.set(registryPath, { body: registry('0.1.0-beta.3', {
+  f.api.responses.set(registryPath, { body: registry('0.1.1', {
     [version]: { name, version, dist: { integrity: f.integrity } },
   }) });
   await f.run();
@@ -137,6 +148,7 @@ test('skips a previously published identical archive on retry', async () => {
 
 test.each([
   { GITHUB_REF: 'refs/heads/main' },
+  { GITHUB_REF: 'refs/tags/v0.1.0-beta.1' },
   { GITHUB_EVENT_NAME: 'push' },
   { GITHUB_SHA: '0'.repeat(40) },
   { GITHUB_REPOSITORY: 'other/repository' },
@@ -147,9 +159,9 @@ test.each([
 });
 
 test('rejects mismatched manifest and tarball versions', async () => {
-  const manifest = await fixture('0.1.0-beta.1');
+  const manifest = await fixture('0.0.0-stage');
   await expect(manifest.run()).rejects.toThrow('manifest version');
-  const tarball = await fixture(version, '0.1.0-beta.1');
+  const tarball = await fixture(version, '0.0.0-stage');
   await expect(tarball.run()).rejects.toThrow('Package name or version');
 });
 
@@ -165,13 +177,13 @@ test('rejects a tag outside main and a moved tag', async () => {
 });
 
 test.each([
-  { tag_name: `v${version}`, draft: true, prerelease: true },
-  { tag_name: `v${version}`, draft: false, prerelease: false },
-  { tag_name: 'v0.1.0-beta.1', draft: false, prerelease: true },
+  { tag_name: `v${version}`, draft: true, prerelease: false },
+  { tag_name: `v${version}`, draft: false, prerelease: true },
+  { tag_name: 'v0.0.0-stage', draft: false, prerelease: false },
 ])('rejects invalid GitHub release metadata %#', async (body) => {
   const f = await fixture();
   f.api.responses.set(releasePath, { body });
-  await expect(f.run()).rejects.toThrow('published GitHub prerelease');
+  await expect(f.run()).rejects.toThrow('published GitHub release');
 });
 
 test.each([403, 500])('does not treat registry HTTP %s as an unpublished version', async (status) => {
@@ -180,9 +192,9 @@ test.each([403, 500])('does not treat registry HTTP %s as an unpublished version
   await expect(f.run()).rejects.toThrow(`HTTP ${status}`);
 });
 
-test('does not publish when beta has advanced or archive integrity differs', async () => {
+test('does not publish when latest has advanced or archive integrity differs', async () => {
   const f = await fixture();
-  f.api.responses.set(registryPath, { body: registry('0.1.0-beta.3') });
+  f.api.responses.set(registryPath, { body: registry('0.1.1') });
   await expect(f.run()).rejects.toThrow('backwards');
   f.api.responses.set(registryPath, { body: registry(version, { [version]: { name, version, dist: { integrity: 'sha512-other' } } }) });
   await expect(f.run()).rejects.toThrow('integrity');

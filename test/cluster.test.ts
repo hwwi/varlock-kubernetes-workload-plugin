@@ -85,10 +85,12 @@ test('reads five real workload kinds and follows a replaced ConfigMap reference'
     const load = async (kind: WorkloadKind): Promise<Record<string, unknown>> => {
       await writeFile(schema, [
         `# @plugin(${JSON.stringify(join(root, 'dist/plugin.cjs'))})`,
-        `# @initK8sWorkload(context=${context}, namespace=${namespace})`,
-        `# @setValuesBulk(k8sWorkloadEnv(kind=${kind}, name=${kind.toLowerCase()}), format=json)`,
+        `# @initK8sWorkload(context=${context}, namespace=${namespace}, defaultKind=${kind}, defaultName=${kind.toLowerCase()}, defaultContainer=app)`,
+        `# @setValuesBulk(k8sWorkloadEnv(), format=json)`,
         '# ---', 'VALUE=', 'OVERRIDE=', 'SECRET_TOKEN=',
-        `LOCAL_TOKEN=k8sWorkloadEnvValue(kind=${kind}, name=${kind.toLowerCase()}, key=SECRET_TOKEN)`, '',
+        'LOCAL_TOKEN=k8sWorkloadEnvValue(key=SECRET_TOKEN)',
+        '# @required=false', 'ABSENT=k8sWorkloadEnvValue(allowMissing=true)',
+        'LOG_LEVEL=fallback(k8sWorkloadEnvValue(allowMissing=true), "info")', '',
       ].join('\n'));
       const value: unknown = JSON.parse(execFileSync(process.execPath, [
         cli, 'load', '--path', directory, '--format', 'json', '--skip-cache',
@@ -98,7 +100,7 @@ test('reads five real workload kinds and follows a replaced ConfigMap reference'
     };
 
     for (const kind of workloadKinds) {
-      expect(await load(kind)).toEqual({ VALUE: 'first', OVERRIDE: 'explicit', SECRET_TOKEN: 'synthetic-cluster-secret', LOCAL_TOKEN: 'synthetic-cluster-secret' });
+      expect(await load(kind)).toEqual({ VALUE: 'first', OVERRIDE: 'explicit', SECRET_TOKEN: 'synthetic-cluster-secret', LOCAL_TOKEN: 'synthetic-cluster-secret', LOG_LEVEL: 'info' });
     }
     kubectl(['apply', '-f', '-'], JSON.stringify({
       apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'config-v2', namespace }, data: { VALUE: 'second' },

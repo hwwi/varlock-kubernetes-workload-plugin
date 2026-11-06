@@ -1,6 +1,6 @@
 # Kubernetes Workload Plugin for Varlock
 
-[![npm beta](https://img.shields.io/npm/v/@hwwi/kubernetes-workload-plugin/beta)](https://www.npmjs.com/package/@hwwi/kubernetes-workload-plugin)
+[![npm](https://img.shields.io/npm/v/@hwwi/kubernetes-workload-plugin)](https://www.npmjs.com/package/@hwwi/kubernetes-workload-plugin)
 
 An unofficial Varlock plugin that loads environment variables from Kubernetes workload Pod templates.
 The plugin follows ConfigMap and Secret references, including ConfigMap names with Kustomize hashes.
@@ -12,10 +12,10 @@ This plugin starts from a workload and reads the environment declared for one of
 
 Requires Node.js 22.19+ and Varlock 1.24.x.
 
-Install the beta:
+Install the package:
 
 ```sh
-pnpm add -D varlock@1.24.0 @hwwi/kubernetes-workload-plugin@beta
+pnpm add -D varlock@1.24.0 @hwwi/kubernetes-workload-plugin
 ```
 
 ## Usage
@@ -34,8 +34,8 @@ create `env/.env.schema`:
 
 ```dotenv
 # @plugin(@hwwi/kubernetes-workload-plugin)
-# @initK8sWorkload(context=dev-cluster, namespace=example)
-# @setValuesBulk(k8sWorkloadEnv(kind=Deployment, name=example-app, container=app), format=json)
+# @initK8sWorkload(context=dev-cluster, namespace=example, defaultKind=Deployment, defaultName=example-app, defaultContainer=app)
+# @setValuesBulk(k8sWorkloadEnv(), format=json)
 # @defaultSensitive=true
 # ---
 
@@ -83,19 +83,18 @@ The plugin does not infer sensitivity from Secret references.
 ### Individual keys and local names
 
 `k8sWorkloadEnvValue()` reads one variable from the selected container's environment.
-Requires version 0.1.0-beta.2 or later.
 Use it instead of `@setValuesBulk()` when selecting individual variables or renaming them:
 
 ```dotenv
 # @plugin(@hwwi/kubernetes-workload-plugin)
-# @initK8sWorkload(context=dev-cluster, namespace=example)
+# @initK8sWorkload(context=dev-cluster, namespace=example, defaultKind=Deployment, defaultName=example-app, defaultContainer=app)
 # @defaultSensitive=true
 # ---
 
 # @type=url @sensitive=false
-API_URL=k8sWorkloadEnvValue(kind=Deployment, name=example-app, container=app)
+API_URL=k8sWorkloadEnvValue()
 
-LOCAL_DATABASE_URL=k8sWorkloadEnvValue(kind=Deployment, name=example-app, container=app, key=DATABASE_URL)
+LOCAL_DATABASE_URL=k8sWorkloadEnvValue(key=DATABASE_URL)
 ```
 
 Omitting `key` uses the enclosing schema variable's name (`API_URL` above), including inside nested
@@ -109,8 +108,8 @@ Individual reads follow the same precedence as bulk reads. They inspect matching
 and then `envFrom` sources from highest to lowest priority, stopping when a value is found.
 An unrelated `fieldRef` or binary value does not block the selected key. An unsupported declaration
 or invalid text for the selected value still fails, as do access errors on resources needed to locate it.
-A missing variable is an error even if the schema item has `@required=false`; an empty string is returned unchanged
-and remains subject to Varlock validation.
+By default, a missing variable is an error even if the schema item has `@required=false`.
+An empty string is returned unchanged and remains subject to Varlock validation.
 
 Kubernetes returns whole ConfigMaps and Secrets, not individual keys. The plugin selects and decodes only
 requested final values. Within one load and connection ID, bulk and individual resolvers share reads of the
@@ -118,6 +117,33 @@ same workload or source resource, including in-flight requests. Several keys fro
 one Secret read, even across workloads or containers. Different connection IDs keep separate reads.
 The next load reads current resources again; these shared reads do not use a disk cache or provide key-level RBAC.
 The same file exporter and local override files work with either resolver.
+
+### Defaults and optional variables
+
+Set `defaultKind`, `defaultName`, and `defaultContainer` on `@initK8sWorkload()` to avoid repeating the target.
+Both resolvers use these defaults. Each explicitly provided resolver argument overrides its matching default.
+Without defaults, `kind` and `name` are required as before. Explicit `kind`, `name`, and `container` arguments
+must resolve to non-empty strings even when defaults are configured.
+
+To allow an individual variable to be absent, use `allowMissing=true`:
+
+```dotenv
+# @required=false
+OPTIONAL_FLAG=k8sWorkloadEnvValue(allowMissing=true)
+
+LOG_LEVEL=fallback(k8sWorkloadEnvValue(allowMissing=true), "info")
+```
+
+The resolver returns `undefined` when the final environment variable is absent. Use `@required=false` to omit it,
+or Varlock's `fallback()` to supply a default. Varlock's `fallback()` also uses the default for an empty string;
+`allowMissing` itself preserves empty strings.
+
+Set `allowMissing` on `@initK8sWorkload()` to change the default for individual reads on that connection.
+A resolver's explicit `allowMissing=false` overrides it. Bulk reads are unaffected.
+
+This option does not hide a missing workload, a wrong container, a broken required ConfigMap/Secret reference,
+or authentication, permission, connection, and decoding errors. Kubernetes reference-level `optional` flags
+still control whether a missing resource or source key is skipped while finding the final value.
 
 ### Generated files
 
@@ -142,6 +168,10 @@ All arguments are named.
 | `context` | Kubeconfig context. Defaults to the current context. |
 | `namespace` | Defaults to the selected context's namespace, then `default`. |
 | `kubeconfig` | Optional kubeconfig file path. Raw YAML/JSON strings are not supported. |
+| `defaultKind` | Optional default workload kind for both resolvers. |
+| `defaultName` | Optional default workload name for both resolvers. |
+| `defaultContainer` | Optional default container name for both resolvers. |
+| `allowMissing` | Boolean default for individual key reads. Defaults to `false`; does not affect bulk reads. |
 | `timeoutMs` | HTTP request timeout after authentication, in milliseconds. Default: `10000`; range: `1`–`300000`. |
 
 Authentication uses the Kubernetes SDK and your kubeconfig. Exec credential plugins may run their configured CLI,
@@ -155,9 +185,9 @@ Direct API server and token arguments are not supported.
 | Argument | Description |
 | --- | --- |
 | `id` | Optional connection ID from `@initK8sWorkload()`. Defaults to `_default`. |
-| `kind` | `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, or `CronJob`. Case-sensitive. |
-| `name` | Workload name. |
-| `container` | Container name. May be omitted when there is only one regular container. |
+| `kind` | `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, or `CronJob`. Case-sensitive. Defaults to `defaultKind`. |
+| `name` | Workload name. Defaults to `defaultName`. |
+| `container` | Defaults to `defaultContainer`, then the only regular container. Required for multiple containers without a default. |
 
 Returns a JSON object string for use with `@setValuesBulk(..., format=json)`.
 
@@ -168,8 +198,9 @@ Accepts the same arguments as `k8sWorkloadEnv()`, plus:
 | Argument | Description |
 | --- | --- |
 | `key` | Final environment variable name in the selected container. Defaults to the enclosing schema item's name within its value expression. Required outside config item value expressions. |
+| `allowMissing` | Optional boolean overriding the connection default. Only a missing final environment variable resolves to `undefined`. |
 
-Returns one string. To rename it locally, declare `LOCAL_NAME=k8sWorkloadEnvValue(..., key=WORKLOAD_NAME)`.
+Returns one string, or `undefined` for an allowed missing variable. To rename it locally, declare `LOCAL_NAME=k8sWorkloadEnvValue(..., key=WORKLOAD_NAME)`.
 Bulk and individual resolvers can be used together, but bulk resolution still validates the complete merged environment.
 
 ## Supported sources
@@ -264,9 +295,10 @@ kind delete cluster --name varlock-workload
 These tests create and remove a temporary namespace in the specified kind context.
 
 Use Conventional Commits for changes. release-please prepares a release PR
-with the next beta version and CHANGELOG updates. Merge the PR when ready
+with the next version and CHANGELOG updates. Merge the PR when ready
 to publish; the release workflow runs all CI checks, including kind
 integration tests, before publishing to npm.
+During `0.x`, features and breaking changes increment the minor version; fixes increment the patch version.
 
 ## Issues and contributions
 

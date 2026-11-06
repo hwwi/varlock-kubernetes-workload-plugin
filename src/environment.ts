@@ -153,7 +153,7 @@ export class WorkloadEnvironmentReader {
     return Object.fromEntries(decoded);
   }
 
-  async readValue(target: WorkloadTarget, key: string): Promise<string> {
+  async readValue(target: WorkloadTarget, key: string, allowMissing = false): Promise<string | undefined> {
     const container = await this.container(target);
     const values = new Map<string, EnvironmentValue>();
     // Walk precedence backwards so unrelated declarations and shadowed sources
@@ -169,6 +169,7 @@ export class WorkloadEnvironmentReader {
       const value = values.get(key);
       if (value !== undefined) return decodeValue(value);
     }
+    if (allowMissing) return undefined;
     throw new WorkloadError('not-found', `Environment variable "${key}" was not found in ${target.kind} "${target.name}" container "${container.name}".`);
   }
 }

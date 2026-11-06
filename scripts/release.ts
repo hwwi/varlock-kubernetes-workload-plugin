@@ -9,33 +9,39 @@ const exec = promisify(execFile);
 const packageName = '@hwwi/kubernetes-workload-plugin';
 const repository = 'hwwi/varlock-kubernetes-workload-plugin';
 const number = '(0|[1-9][0-9]*)';
-const betaPattern = new RegExp(`^${number}\\.${number}\\.${number}-beta\\.${number}$`);
-type BetaVersion = readonly [bigint, bigint, bigint, bigint];
+const prereleaseId = '(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)';
+const versionPattern = new RegExp(`^${number}\\.${number}\\.${number}(?:-(${prereleaseId}(?:\\.${prereleaseId})*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`);
+type VersionCore = readonly [bigint, bigint, bigint];
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-export function betaVersion(value: string): BetaVersion {
-  const match = betaPattern.exec(value);
-  const [, major, minor, patch, beta] = match ?? [];
-  if (!major || !minor || !patch || !beta) throw new Error(`Expected an X.Y.Z-beta.N version, received ${value}.`);
-  const result: BetaVersion = [BigInt(major), BigInt(minor), BigInt(patch), BigInt(beta)];
-  if (result.slice(0, 3).some((part) => part > BigInt(Number.MAX_SAFE_INTEGER))) {
-    throw new Error('Version components exceed the SemVer limit.');
-  }
-  return result;
+function parseVersion(value: string): { core: VersionCore; prerelease: boolean } {
+  const match = versionPattern.exec(value);
+  const [, major, minor, patch, prerelease] = match ?? [];
+  if (match?.[0] !== value || !major || !minor || !patch) throw new Error(`Expected a valid SemVer version, received ${value}.`);
+  const core: VersionCore = [BigInt(major), BigInt(minor), BigInt(patch)];
+  if (core.some((part) => part > BigInt(Number.MAX_SAFE_INTEGER))) throw new Error('Version components exceed the SemVer limit.');
+  return { core, prerelease: prerelease !== undefined };
 }
 
-export function compareBeta(left: string, right: string): number {
-  const a = betaVersion(left);
-  const b = betaVersion(right);
-  for (const [index, part] of a.entries()) {
-    const other = b[index];
-    if (other === undefined) throw new Error('Invalid beta version.');
+export function releaseVersion(value: string): VersionCore {
+  const parsed = parseVersion(value);
+  if (parsed.prerelease || value.includes('+')) throw new Error(`Expected an X.Y.Z release version, received ${value}.`);
+  return parsed.core;
+}
+
+// The candidate is a plain release; latest may still point to an old stage or beta.
+export function compareReleaseToLatest(version: string, latest: string): number {
+  const candidate = releaseVersion(version);
+  const current = parseVersion(latest);
+  for (const [index, part] of candidate.entries()) {
+    const other = current.core[index];
+    if (other === undefined) throw new Error('Invalid release version.');
     if (part !== other) return part < other ? -1 : 1;
   }
-  return 0;
+  return current.prerelease ? 1 : 0;
 }
 
 function environment(name: string): string {
@@ -64,10 +70,10 @@ function checkPackage(value: unknown, version: string): void {
 export async function validateRelease(): Promise<{ tag: string; version: string; sha: string }> {
   const ref = environment('GITHUB_REF');
   if (environment('GITHUB_EVENT_NAME') !== 'workflow_dispatch' || !ref.startsWith('refs/tags/v')) {
-    throw new Error('Publishing requires workflow_dispatch on a vX.Y.Z-beta.N tag.');
+    throw new Error('Publishing requires workflow_dispatch on a vX.Y.Z tag.');
   }
   const version = ref.slice('refs/tags/v'.length);
-  betaVersion(version);
+  releaseVersion(version);
   const tag = `v${version}`;
   const sha = environment('GITHUB_SHA');
   if (!/^[a-f0-9]{40}$/.test(sha) || environment('GITHUB_REPOSITORY') !== repository) {
@@ -85,13 +91,14 @@ export async function validateRelease(): Promise<{ tag: string; version: string;
     authorization: `Bearer ${environment('GH_TOKEN')}`,
     accept: 'application/vnd.github+json',
   });
-  if (!object(release) || release.tag_name !== tag || release.draft !== false || release.prerelease !== true) {
-    throw new Error('The tag must have a published GitHub prerelease.');
+  if (!object(release) || release.tag_name !== tag || release.draft !== false || release.prerelease !== false) {
+    throw new Error('The tag must have a published GitHub release (not a prerelease).');
   }
   return { tag, version, sha };
 }
 
 export function publicationDecision(metadata: unknown, version: string, integrity: string): boolean {
+  releaseVersion(version);
   if (metadata === undefined) return true;
   if (!object(metadata) || !object(metadata.versions) || !object(metadata['dist-tags'])) {
     throw new Error('Registry returned invalid package metadata.');
@@ -104,11 +111,11 @@ export function publicationDecision(metadata: unknown, version: string, integrit
     }
     return false;
   }
-  const currentBeta = metadata['dist-tags'].beta;
-  if (currentBeta !== undefined) {
-    if (typeof currentBeta !== 'string') throw new Error('Registry returned an invalid beta tag.');
-    if (compareBeta(version, currentBeta) <= 0) {
-      throw new Error(`Refusing to move beta backwards from ${currentBeta} to ${version}.`);
+  const currentLatest = metadata['dist-tags'].latest;
+  if (currentLatest !== undefined) {
+    if (typeof currentLatest !== 'string') throw new Error('Registry returned an invalid latest tag.');
+    if (compareReleaseToLatest(version, currentLatest) <= 0) {
+      throw new Error(`Refusing to move latest backwards from ${currentLatest} to ${version}.`);
     }
   }
   return true;

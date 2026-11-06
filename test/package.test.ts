@@ -34,11 +34,12 @@ test('installs the tarball and checks the release command', async () => {
     await mkdir(input);
     await writeFile(join(input, '.env.schema'), [
       '# @plugin(@hwwi/kubernetes-workload-plugin)',
-      `# @initK8sWorkload(kubeconfig=${JSON.stringify(api.kubeconfig)})`,
-      '# @setValuesBulk(k8sWorkloadEnv(kind=Deployment,name=app),format=json)',
+      `# @initK8sWorkload(kubeconfig=${JSON.stringify(api.kubeconfig)}, defaultKind=Deployment, defaultName=app)`,
+      '# @setValuesBulk(k8sWorkloadEnv(),format=json)',
       '# ---',
       'PACKAGE_TEST=',
-      'LOCAL_PACKAGE_TEST=k8sWorkloadEnvValue(kind=Deployment, name=app, key=PACKAGE_TEST)',
+      'LOCAL_PACKAGE_TEST=k8sWorkloadEnvValue(key=PACKAGE_TEST)',
+      '# @required=false', 'OPTIONAL=k8sWorkloadEnvValue(allowMissing=true)',
       '',
     ].join('\n'));
 
@@ -75,7 +76,7 @@ test('installs the tarball and checks the release command', async () => {
       const publishedPackage = publication && typeof publication === 'object' && packageName in publication
         ? publication[packageName] : publication;
       expect(publishedPackage).toMatchObject({ name: packageName });
-      expect(result.stderr).toContain('tag beta and public access (dry-run)');
+      expect(result.stderr).toContain('tag latest and public access (dry-run)');
     }
     expect(api.requests.every((request) => request.method === 'GET')).toBe(true);
   } finally {

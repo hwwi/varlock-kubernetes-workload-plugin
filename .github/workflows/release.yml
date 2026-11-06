@@ -1,4 +1,4 @@
-name: Release npm beta
+name: Release npm
 on:
   push:
     branches: [main]
@@ -100,9 +100,9 @@ jobs:
         run: node scripts/release.ts check artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: Publish npm beta with OIDC
+      - name: Publish npm with OIDC
         if: steps.package.outputs.publish == 'true'
-        run: npm publish "$RELEASE_TARBALL" --access public --tag beta --provenance --ignore-scripts
+        run: npm publish "$RELEASE_TARBALL" --access public --tag latest --provenance --ignore-scripts
         env:
           RELEASE_TARBALL: ${{ steps.package.outputs.tarball }}
           NODE_AUTH_TOKEN: ''
