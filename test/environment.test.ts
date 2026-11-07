@@ -9,7 +9,9 @@ import { createApi } from './api.js';
 import type { TestApi } from './api.js';
 
 const activeApis: TestApi[] = [];
-afterEach(async () => { await Promise.all(activeApis.splice(0).map((api) => api.close())); });
+afterEach(async () => {
+  await Promise.all(activeApis.splice(0).map((api) => api.close()));
+});
 
 async function setup(container: V1Container = { name: 'app' }) {
   const api = await createApi();
@@ -34,79 +36,131 @@ describe('workload templates', () => {
     const { api, connection } = await setup();
     api.workload('Deployment', [{ name: 'app' }, { name: 'sidecar', env: [{ name: 'ONLY', value: 'sidecar' }] }]);
     await expect(readWorkloadEnvironment(connection, target)).rejects.toThrow('Multiple containers');
-    await expect(readWorkloadEnvironment(connection, { ...target, container: 'sidecar' })).resolves.toEqual({ ONLY: 'sidecar' });
-    await expect(readWorkloadEnvironment(connection, { ...target, container: 'init' })).rejects.toThrow('was not found');
+    await expect(readWorkloadEnvironment(connection, { ...target, container: 'sidecar' })).resolves.toEqual({
+      ONLY: 'sidecar',
+    });
+    await expect(readWorkloadEnvironment(connection, { ...target, container: 'init' })).rejects.toThrow(
+      'was not found',
+    );
   });
 
   test('uses the selected context namespace and supports an explicit override', async () => {
     const { api } = await setup();
     api.workload('Deployment', [{ name: 'app', env: [{ name: 'VALUE', value: 'other' }] }], 'other');
-    await expect(readWorkloadEnvironment(new KubernetesConnection({ kubeconfig: api.kubeconfig, context: 'other' }), target)).resolves.toEqual({ VALUE: 'other' });
-    await expect(readWorkloadEnvironment(new KubernetesConnection({ kubeconfig: api.kubeconfig, context: 'other', namespace: 'test' }), target)).resolves.toEqual({});
+    await expect(
+      readWorkloadEnvironment(new KubernetesConnection({ kubeconfig: api.kubeconfig, context: 'other' }), target),
+    ).resolves.toEqual({ VALUE: 'other' });
+    await expect(
+      readWorkloadEnvironment(
+        new KubernetesConnection({ kubeconfig: api.kubeconfig, context: 'other', namespace: 'test' }),
+        target,
+      ),
+    ).resolves.toEqual({});
   });
 
   test('rejects invalid configuration before sending requests', async () => {
     const { api } = await setup();
-    expect(() => new KubernetesConnection({ kubeconfig: api.kubeconfig, context: 'missing' })).toThrow('context "missing"');
-    for (const timeoutMs of [0, -1, 0.1, Infinity, 300001]) expect(() => new KubernetesConnection({ kubeconfig: api.kubeconfig, timeoutMs })).toThrow('timeoutMs');
+    expect(() => new KubernetesConnection({ kubeconfig: api.kubeconfig, context: 'missing' })).toThrow(
+      'context "missing"',
+    );
+    for (const timeoutMs of [0, -1, 0.1, Infinity, 300001])
+      expect(() => new KubernetesConnection({ kubeconfig: api.kubeconfig, timeoutMs })).toThrow('timeoutMs');
     expect(() => parseWorkloadKind('Pod')).toThrow('Unsupported workload kind');
     expect(api.requests).toHaveLength(0);
   });
 });
 
 describe('container environment semantics', () => {
-  test.each(['ConfigMap', 'Secret'])('preserves a __proto__ data key from %s when envFrom prefixes its name', async (kind) => {
-    const { api, connection } = await setup({ name: 'app', envFrom: [kind === 'ConfigMap'
-      ? { configMapRef: { name: 'data' }, prefix: 'APP_' }
-      : { secretRef: { name: 'data' }, prefix: 'APP_' }] });
-    const data = Object.fromEntries([['__proto__', 'preserved-value']]);
-    if (kind === 'ConfigMap') api.configMap('data', data);
-    else api.secret('data', data);
-    await expect(readWorkloadEnvironment(connection, target)).resolves.toEqual({ APP___proto__: 'preserved-value' });
-  });
+  test.each(['ConfigMap', 'Secret'])(
+    'preserves a __proto__ data key from %s when envFrom prefixes its name',
+    async (kind) => {
+      const { api, connection } = await setup({
+        name: 'app',
+        envFrom: [
+          kind === 'ConfigMap'
+            ? { configMapRef: { name: 'data' }, prefix: 'APP_' }
+            : { secretRef: { name: 'data' }, prefix: 'APP_' },
+        ],
+      });
+      const data = Object.fromEntries([['__proto__', 'preserved-value']]);
+      if (kind === 'ConfigMap') api.configMap('data', data);
+      else api.secret('data', data);
+      await expect(readWorkloadEnvironment(connection, target)).resolves.toEqual({ APP___proto__: 'preserved-value' });
+    },
+  );
 
-  test.each(['constructor', 'toString', '__proto__'])('rejects final env key %s that Varlock would silently discard', async (name) => {
-    const { connection } = await setup({ name: 'app', env: [{ name, value: 'must-not-be-silently-lost' }] });
-    await expect(readWorkloadEnvironment(connection, target)).rejects.toMatchObject({ code: 'unsupported' });
-  });
+  test.each(['constructor', 'toString', '__proto__'])(
+    'rejects final env key %s that Varlock would silently discard',
+    async (name) => {
+      const { connection } = await setup({ name: 'app', env: [{ name, value: 'must-not-be-silently-lost' }] });
+      await expect(readWorkloadEnvironment(connection, target)).rejects.toMatchObject({ code: 'unsupported' });
+    },
+  );
 
-  test.each(['envFrom', 'env'])('validates final values after a later %s overrides binary Secret data', async (override) => {
-    const container: V1Container = { name: 'app', envFrom: [{ secretRef: { name: 'binary' } }] };
-    if (override === 'envFrom') container.envFrom?.push({ configMapRef: { name: 'replacement' } });
-    else container.env = [{ name: 'TOKEN', value: 'usable-text' }];
-    const { api, connection } = await setup(container);
-    api.responses.set('/api/v1/namespaces/test/secrets/binary', { body: { data: { TOKEN: '/w==' } } });
-    api.configMap('replacement', { TOKEN: 'usable-text' });
-    await expect(readWorkloadEnvironment(connection, target)).resolves.toEqual({ TOKEN: 'usable-text' });
-  });
+  test.each(['envFrom', 'env'])(
+    'validates final values after a later %s overrides binary Secret data',
+    async (override) => {
+      const container: V1Container = { name: 'app', envFrom: [{ secretRef: { name: 'binary' } }] };
+      if (override === 'envFrom') container.envFrom?.push({ configMapRef: { name: 'replacement' } });
+      else container.env = [{ name: 'TOKEN', value: 'usable-text' }];
+      const { api, connection } = await setup(container);
+      api.responses.set('/api/v1/namespaces/test/secrets/binary', { body: { data: { TOKEN: '/w==' } } });
+      api.configMap('replacement', { TOKEN: 'usable-text' });
+      await expect(readWorkloadEnvironment(connection, target)).resolves.toEqual({ TOKEN: 'usable-text' });
+    },
+  );
 
   test('merges sources in order, adds prefixes, and lets explicit env override all envFrom sources', async () => {
-    const { api, connection } = await setup({ name: 'app', envFrom: [
-      { configMapRef: { name: 'config-hash123' } }, { secretRef: { name: 'secrets' } },
-      { configMapRef: { name: 'config-hash123' }, prefix: 'COPY_' },
-    ], env: [{ name: 'SHARED', value: 'explicit' }, { name: 'EMPTY', value: '' }, { name: 'UNSET' }] });
-    api.configMap('config-hash123', { SHARED: 'config', URL: 'localhost', EMPTY: 'nonempty' }, { FILE: Buffer.from('excluded').toString('base64') });
+    const { api, connection } = await setup({
+      name: 'app',
+      envFrom: [
+        { configMapRef: { name: 'config-hash123' } },
+        { secretRef: { name: 'secrets' } },
+        { configMapRef: { name: 'config-hash123' }, prefix: 'COPY_' },
+      ],
+      env: [{ name: 'SHARED', value: 'explicit' }, { name: 'EMPTY', value: '' }, { name: 'UNSET' }],
+    });
+    api.configMap(
+      'config-hash123',
+      { SHARED: 'config', URL: 'localhost', EMPTY: 'nonempty' },
+      { FILE: Buffer.from('excluded').toString('base64') },
+    );
     api.secret('secrets', { SHARED: 'secret', TOKEN: 'token', EXPRESSION: '$(literal)' });
     await expect(readWorkloadEnvironment(connection, target)).resolves.toEqual({
-      SHARED: 'explicit', URL: 'localhost', EMPTY: '', TOKEN: 'token', EXPRESSION: '$(literal)',
-      COPY_SHARED: 'config', COPY_URL: 'localhost', COPY_EMPTY: 'nonempty', UNSET: '',
+      SHARED: 'explicit',
+      URL: 'localhost',
+      EMPTY: '',
+      TOKEN: 'token',
+      EXPRESSION: '$(literal)',
+      COPY_SHARED: 'config',
+      COPY_URL: 'localhost',
+      COPY_EMPTY: 'nonempty',
+      UNSET: '',
     });
     expect(api.requests.filter((request) => request.path.includes('configmaps'))).toHaveLength(1);
   });
 
   test('reads only the selected key, preserving UTF-8, BOM, newlines, and whitespace', async () => {
-    const { api, connection } = await setup({ name: 'app', env: [
-      { name: 'VALUE', valueFrom: { configMapKeyRef: { name: 'config', key: 'value' } } },
-      { name: 'TOKEN', valueFrom: { secretKeyRef: { name: 'secret', key: 'token' } } },
-    ] });
+    const { api, connection } = await setup({
+      name: 'app',
+      env: [
+        { name: 'VALUE', valueFrom: { configMapKeyRef: { name: 'config', key: 'value' } } },
+        { name: 'TOKEN', valueFrom: { secretKeyRef: { name: 'secret', key: 'token' } } },
+      ],
+    });
     const token = '\uFEFF 한국어\n"quote" # $ = \\ end ';
     api.configMap('config', { value: '', irrelevant: '\0' });
-    api.responses.set('/api/v1/namespaces/test/secrets/secret', { body: { data: { token: Buffer.from(token).toString('base64'), binary: '/w==' } } });
+    api.responses.set('/api/v1/namespaces/test/secrets/secret', {
+      body: { data: { token: Buffer.from(token).toString('base64'), binary: '/w==' } },
+    });
     await expect(readWorkloadEnvironment(connection, target)).resolves.toEqual({ VALUE: '', TOKEN: token });
   });
 
   test('preserves a prefixed constructor key as data without mutating the result prototype', async () => {
-    const { api, connection } = await setup({ name: 'app', envFrom: [{ configMapRef: { name: 'config' }, prefix: 'APP_' }] });
+    const { api, connection } = await setup({
+      name: 'app',
+      envFrom: [{ configMapRef: { name: 'config' }, prefix: 'APP_' }],
+    });
     api.configMap('config', { constructor: 'safe' });
     const result = await readWorkloadEnvironment(connection, target);
     expect(Object.hasOwn(result, 'APP_constructor')).toBe(true);
@@ -115,19 +169,24 @@ describe('container environment semantics', () => {
   });
 
   test('skips optional missing resources and keys without erasing earlier envFrom values', async () => {
-    const { api, connection } = await setup({ name: 'app', envFrom: [
-      { configMapRef: { name: 'config' } }, { secretRef: { name: 'missing', optional: true } },
-    ], env: [
-      { name: 'KEEP', valueFrom: { secretKeyRef: { name: 'missing', key: 'key', optional: true } } },
-      { name: 'KEEP', valueFrom: { configMapKeyRef: { name: 'config', key: 'missing', optional: true } } },
-    ] });
+    const { api, connection } = await setup({
+      name: 'app',
+      envFrom: [{ configMapRef: { name: 'config' } }, { secretRef: { name: 'missing', optional: true } }],
+      env: [
+        { name: 'KEEP', valueFrom: { secretKeyRef: { name: 'missing', key: 'key', optional: true } } },
+        { name: 'KEEP', valueFrom: { configMapKeyRef: { name: 'config', key: 'missing', optional: true } } },
+      ],
+    });
     api.configMap('config', { KEEP: 'present' });
     await expect(readWorkloadEnvironment(connection, target)).resolves.toEqual({ KEEP: 'present' });
     expect(api.requests.filter((request) => request.path.endsWith('/secrets/missing'))).toHaveLength(1);
   });
 
   test('rejects required missing keys, including binaryData-only ConfigMap keys', async () => {
-    const { api, connection } = await setup({ name: 'app', env: [{ name: 'FILE', valueFrom: { configMapKeyRef: { name: 'config', key: 'FILE' } } }] });
+    const { api, connection } = await setup({
+      name: 'app',
+      env: [{ name: 'FILE', valueFrom: { configMapKeyRef: { name: 'config', key: 'FILE' } } }],
+    });
     api.configMap('config', {}, { FILE: Buffer.from('file').toString('base64') });
     await expect(readWorkloadEnvironment(connection, target)).rejects.toThrow('Key "FILE" was not found');
   });
@@ -164,17 +223,17 @@ describe('container environment semantics', () => {
 });
 
 describe('API failures', () => {
-  test.each([
-    { body: { data: { TOKEN: { value: 'DO_NOT_LEAK_RESPONSE' } } } },
-    { body: ['DO_NOT_LEAK_RESPONSE'] },
-  ])('rejects malformed successful resource data without leaking it or retaining connections %#', async ({ body }) => {
-    const { api, connection } = await setup({ name: 'app', envFrom: [{ secretRef: { name: 'secret' } }] });
-    api.responses.set('/api/v1/namespaces/test/secrets/secret', { body });
-    const failure = await readWorkloadEnvironment(connection, target).catch((error: unknown) => error);
-    expect(failure).toMatchObject({ code: 'value' });
-    expect(String(failure)).not.toContain('DO_NOT_LEAK_RESPONSE');
-    await expect.poll(() => api.openConnections(), { timeout: 500 }).toBe(0);
-  });
+  test.each([{ body: { data: { TOKEN: { value: 'DO_NOT_LEAK_RESPONSE' } } } }, { body: ['DO_NOT_LEAK_RESPONSE'] }])(
+    'rejects malformed successful resource data without leaking it or retaining connections %#',
+    async ({ body }) => {
+      const { api, connection } = await setup({ name: 'app', envFrom: [{ secretRef: { name: 'secret' } }] });
+      api.responses.set('/api/v1/namespaces/test/secrets/secret', { body });
+      const failure = await readWorkloadEnvironment(connection, target).catch((error: unknown) => error);
+      expect(failure).toMatchObject({ code: 'value' });
+      expect(String(failure)).not.toContain('DO_NOT_LEAK_RESPONSE');
+      await expect.poll(() => api.openConnections(), { timeout: 500 }).toBe(0);
+    },
+  );
 
   test.each([200, 403])('releases request-owned connections after HTTP %s', async (status) => {
     const { api, connection } = await setup();
@@ -191,13 +250,32 @@ describe('API failures', () => {
   test('starts the HTTP timeout after exec credentials are refreshed', async () => {
     const { api } = await setup();
     const command = join(api.directory, 'credential.mjs');
-    await writeFile(command, `setTimeout(() => process.stdout.write(JSON.stringify({apiVersion:'client.authentication.k8s.io/v1beta1',kind:'ExecCredential',status:{token:'test-token'}})), 200);`);
+    await writeFile(
+      command,
+      `setTimeout(() => process.stdout.write(JSON.stringify({apiVersion:'client.authentication.k8s.io/v1beta1',kind:'ExecCredential',status:{token:'test-token'}})), 200);`,
+    );
     const kubeconfig: unknown = JSON.parse(await readFile(api.kubeconfig, 'utf8'));
-    if (!kubeconfig || typeof kubeconfig !== 'object' || !('clusters' in kubeconfig)) throw new Error('Invalid kubeconfig fixture');
-    await writeFile(api.kubeconfig, JSON.stringify({
-      ...kubeconfig,
-      users: [{ name: 'test', user: { exec: { apiVersion: 'client.authentication.k8s.io/v1beta1', command: process.execPath, args: [command], interactiveMode: 'Never' } } }],
-    }));
+    if (!kubeconfig || typeof kubeconfig !== 'object' || !('clusters' in kubeconfig))
+      throw new Error('Invalid kubeconfig fixture');
+    await writeFile(
+      api.kubeconfig,
+      JSON.stringify({
+        ...kubeconfig,
+        users: [
+          {
+            name: 'test',
+            user: {
+              exec: {
+                apiVersion: 'client.authentication.k8s.io/v1beta1',
+                command: process.execPath,
+                args: [command],
+                interactiveMode: 'Never',
+              },
+            },
+          },
+        ],
+      }),
+    );
     const connection = new KubernetesConnection({ kubeconfig: api.kubeconfig, timeoutMs: 50 });
     await expect(readWorkloadEnvironment(connection, target)).resolves.toEqual({});
     expect(api.requests[0]?.authorization).toBe('Bearer test-token');
@@ -205,13 +283,23 @@ describe('API failures', () => {
 
   test.each([401, 403, 404, 500])('fails on HTTP %s without leaking the response body', async (status) => {
     const { api, connection } = await setup({ name: 'app', envFrom: [{ secretRef: { name: 'secret' } }] });
-    api.responses.set('/api/v1/namespaces/test/secrets/secret', { status, body: { message: 'DO_NOT_LEAK_SECRET', code: status } });
+    api.responses.set('/api/v1/namespaces/test/secrets/secret', {
+      status,
+      body: { message: 'DO_NOT_LEAK_SECRET', code: status },
+    });
     await expect(readWorkloadEnvironment(connection, target)).rejects.toThrow(/Secret "secret"/);
-    try { await readWorkloadEnvironment(connection, target); } catch (error) { expect(String(error)).not.toContain('DO_NOT_LEAK_SECRET'); }
+    try {
+      await readWorkloadEnvironment(connection, target);
+    } catch (error) {
+      expect(String(error)).not.toContain('DO_NOT_LEAK_SECRET');
+    }
   });
 
   test.each([401, 403, 500])('does not suppress HTTP %s for optional references', async (status) => {
-    const { api, connection } = await setup({ name: 'app', envFrom: [{ secretRef: { name: 'secret', optional: true } }] });
+    const { api, connection } = await setup({
+      name: 'app',
+      envFrom: [{ secretRef: { name: 'secret', optional: true } }],
+    });
     api.responses.set('/api/v1/namespaces/test/secrets/secret', { status, body: { code: status } });
     await expect(readWorkloadEnvironment(connection, target)).rejects.toThrow();
   });
@@ -223,7 +311,9 @@ describe('API failures', () => {
     if (!original) throw new Error('Missing fixture');
     api.responses.set(path, { ...original, delayMs: 1000 });
     const started = Date.now();
-    await expect(readWorkloadEnvironment(new KubernetesConnection({ kubeconfig: api.kubeconfig, timeoutMs: 30 }), target)).rejects.toMatchObject({ code: 'timeout' });
+    await expect(
+      readWorkloadEnvironment(new KubernetesConnection({ kubeconfig: api.kubeconfig, timeoutMs: 30 }), target),
+    ).rejects.toMatchObject({ code: 'timeout' });
     expect(Date.now() - started).toBeLessThan(900);
   });
 });
@@ -231,13 +321,21 @@ describe('API failures', () => {
 describe('individual workload environment values', () => {
   test.each(workloadKinds)('reads a key from %s and ignores unrelated unsupported declarations', async (kind) => {
     const { api, connection } = await setup();
-    api.workload(kind, [{ name: 'app', env: [
-      { name: 'VALUE', value: 'selected' },
-      { name: 'POD_IP', valueFrom: { fieldRef: { fieldPath: 'status.podIP' } } },
-      { name: 'UNRELATED', valueFrom: { secretKeyRef: { name: 'forbidden', key: 'key' } } },
-    ], envFrom: [{ secretRef: { name: 'forbidden' } }] }]);
+    api.workload(kind, [
+      {
+        name: 'app',
+        env: [
+          { name: 'VALUE', value: 'selected' },
+          { name: 'POD_IP', valueFrom: { fieldRef: { fieldPath: 'status.podIP' } } },
+          { name: 'UNRELATED', valueFrom: { secretKeyRef: { name: 'forbidden', key: 'key' } } },
+        ],
+        envFrom: [{ secretRef: { name: 'forbidden' } }],
+      },
+    ]);
     api.responses.set('/api/v1/namespaces/test/secrets/forbidden', { status: 403, body: {} });
-    await expect(new WorkloadEnvironmentReader(connection).readValue({ kind, name: 'app' }, 'VALUE')).resolves.toBe('selected');
+    await expect(new WorkloadEnvironmentReader(connection).readValue({ kind, name: 'app' }, 'VALUE')).resolves.toBe(
+      'selected',
+    );
     expect(api.requests).toHaveLength(1);
   });
 
@@ -250,26 +348,32 @@ describe('individual workload environment values', () => {
     api.workload('Deployment', [{ name: 'app', envFrom: [{ secretRef: { name: 'shared' } }] }], 'test', 'second');
     api.secret('shared', { TOKEN: 'token', EMPTY: '' });
     const reader = new WorkloadEnvironmentReader(connection);
-    await expect(Promise.all([
-      reader.readValue({ ...target, container: 'app' }, 'APP_TOKEN'),
-      reader.readValue({ ...target, container: 'app' }, 'APP_EMPTY'),
-      reader.readValue({ ...target, container: 'sidecar' }, 'TOKEN'),
-      reader.read({ ...target, container: 'app' }),
-      reader.readValue({ ...target, name: 'second' }, 'TOKEN'),
-    ])).resolves.toEqual(['token', '', 'token', { APP_TOKEN: 'token', APP_EMPTY: '' }, 'token']);
+    await expect(
+      Promise.all([
+        reader.readValue({ ...target, container: 'app' }, 'APP_TOKEN'),
+        reader.readValue({ ...target, container: 'app' }, 'APP_EMPTY'),
+        reader.readValue({ ...target, container: 'sidecar' }, 'TOKEN'),
+        reader.read({ ...target, container: 'app' }),
+        reader.readValue({ ...target, name: 'second' }, 'TOKEN'),
+      ]),
+    ).resolves.toEqual(['token', '', 'token', { APP_TOKEN: 'token', APP_EMPTY: '' }, 'token']);
     expect(api.requests).toHaveLength(3);
   });
 
   test('uses final env names, prefixes, source order, and optional fallbacks', async () => {
-    const { api, connection } = await setup({ name: 'app', envFrom: [
-      { configMapRef: { name: 'earlier' }, prefix: 'APP_' },
-      { secretRef: { name: 'later' }, prefix: 'APP_' },
-      { configMapRef: { name: 'unrelated' }, prefix: 'OTHER_' },
-    ], env: [
-      { name: 'APP_VALUE', valueFrom: { secretKeyRef: { name: 'missing', key: 'value', optional: true } } },
-      { name: 'APP_VALUE', valueFrom: { configMapKeyRef: { name: 'earlier', key: 'absent', optional: true } } },
-      { name: 'RENAMED', valueFrom: { configMapKeyRef: { name: 'earlier', key: 'VALUE' } } },
-    ] });
+    const { api, connection } = await setup({
+      name: 'app',
+      envFrom: [
+        { configMapRef: { name: 'earlier' }, prefix: 'APP_' },
+        { secretRef: { name: 'later' }, prefix: 'APP_' },
+        { configMapRef: { name: 'unrelated' }, prefix: 'OTHER_' },
+      ],
+      env: [
+        { name: 'APP_VALUE', valueFrom: { secretKeyRef: { name: 'missing', key: 'value', optional: true } } },
+        { name: 'APP_VALUE', valueFrom: { configMapKeyRef: { name: 'earlier', key: 'absent', optional: true } } },
+        { name: 'RENAMED', valueFrom: { configMapKeyRef: { name: 'earlier', key: 'VALUE' } } },
+      ],
+    });
     api.configMap('earlier', { VALUE: 'earlier', FALLBACK: 'fallback' });
     api.secret('later', { VALUE: 'later' });
     const reader = new WorkloadEnvironmentReader(connection);
@@ -282,9 +386,15 @@ describe('individual workload environment values', () => {
 
   test('validates only the selected final value and allows prototype source keys to be renamed', async () => {
     const { api, connection } = await setup({ name: 'app', envFrom: [{ secretRef: { name: 'data' } }] });
-    api.responses.set('/api/v1/namespaces/test/secrets/data', { body: { data: Object.fromEntries([
-      ['TOKEN', Buffer.from('token').toString('base64')], ['BINARY', '/w=='], ['constructor', Buffer.from('safe').toString('base64')],
-    ]) } });
+    api.responses.set('/api/v1/namespaces/test/secrets/data', {
+      body: {
+        data: Object.fromEntries([
+          ['TOKEN', Buffer.from('token').toString('base64')],
+          ['BINARY', '/w=='],
+          ['constructor', Buffer.from('safe').toString('base64')],
+        ]),
+      },
+    });
     const reader = new WorkloadEnvironmentReader(connection);
     await expect(reader.readValue(target, 'TOKEN')).resolves.toBe('token');
     await expect(reader.readValue(target, 'constructor')).resolves.toBe('safe');
@@ -293,17 +403,23 @@ describe('individual workload environment values', () => {
   });
 
   test.each([401, 403, 500])('does not hide HTTP %s while locating the selected key', async (status) => {
-    const { api, connection } = await setup({ name: 'app', envFrom: [{ secretRef: { name: 'needed', optional: true } }] });
+    const { api, connection } = await setup({
+      name: 'app',
+      envFrom: [{ secretRef: { name: 'needed', optional: true } }],
+    });
     api.responses.set('/api/v1/namespaces/test/secrets/needed', { status, body: {} });
     await expect(new WorkloadEnvironmentReader(connection).readValue(target, 'VALUE')).rejects.toThrow();
   });
 
   test('rejects selected unsupported declarations and required missing references', async () => {
-    const { connection } = await setup({ name: 'app', env: [
-      { name: 'POD_IP', valueFrom: { fieldRef: { fieldPath: 'status.podIP' } } },
-      { name: 'EXPANSION', value: '$(OTHER)' },
-      { name: 'MISSING', valueFrom: { secretKeyRef: { name: 'missing', key: 'key' } } },
-    ] });
+    const { connection } = await setup({
+      name: 'app',
+      env: [
+        { name: 'POD_IP', valueFrom: { fieldRef: { fieldPath: 'status.podIP' } } },
+        { name: 'EXPANSION', value: '$(OTHER)' },
+        { name: 'MISSING', valueFrom: { secretKeyRef: { name: 'missing', key: 'key' } } },
+      ],
+    });
     const reader = new WorkloadEnvironmentReader(connection);
     await expect(reader.readValue(target, 'POD_IP')).rejects.toMatchObject({ code: 'unsupported' });
     await expect(reader.readValue(target, 'EXPANSION')).rejects.toMatchObject({ code: 'unsupported' });
@@ -320,7 +436,9 @@ describe('individual workload environment values', () => {
     const reader = new WorkloadEnvironmentReader(connection);
     await expect(reader.readValue(target, 'VALUE')).resolves.toBe('first');
     await expect(reader.readValue({ ...target, name: 'second' }, 'VALUE')).resolves.toBe('second-workload');
-    const other = new WorkloadEnvironmentReader(new KubernetesConnection({ kubeconfig: api.kubeconfig, namespace: 'other' }));
+    const other = new WorkloadEnvironmentReader(
+      new KubernetesConnection({ kubeconfig: api.kubeconfig, namespace: 'other' }),
+    );
     await expect(other.readValue(target, 'VALUE')).resolves.toBe('other-namespace');
     api.workload('Deployment', [{ name: 'app', envFrom: [{ configMapRef: { name: 'new-hash' } }] }]);
     api.configMap('new-hash', { VALUE: 'updated' });

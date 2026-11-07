@@ -14,8 +14,12 @@ type RequestDispatcher = NonNullable<ReturnType<RequestContext['getDispatcher']>
 type DataObserver = (data: Record<string, string> | undefined) => void;
 
 function isStringMap(value: unknown): value is Record<string, string> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    && Object.values(value).every((item: unknown) => typeof item === 'string');
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.values(value).every((item: unknown) => typeof item === 'string')
+  );
 }
 
 function resourceData(raw: string): Record<string, string> | undefined {
@@ -36,31 +40,35 @@ class ApiRequest {
   constructor(timeoutMs: number, observeData?: DataObserver) {
     this.options = {
       middlewareMergeStrategy: 'append',
-      middleware: [{
-        pre: (context) => {
-          // Credential refresh completes before middleware runs; time only the HTTP request.
-          this.signal = AbortSignal.timeout(timeoutMs);
-          context.setSignal(this.signal);
-          const dispatcher = context.getDispatcher();
-          if (dispatcher) this.dispatchers.add(dispatcher);
-          return new Observable(Promise.resolve(context));
+      middleware: [
+        {
+          pre: (context) => {
+            // Credential refresh completes before middleware runs; time only the HTTP request.
+            this.signal = AbortSignal.timeout(timeoutMs);
+            context.setSignal(this.signal);
+            const dispatcher = context.getDispatcher();
+            if (dispatcher) this.dispatchers.add(dispatcher);
+            return new Observable(Promise.resolve(context));
+          },
+          post(context) {
+            if (!observeData || context.httpStatusCode !== 200) return new Observable(Promise.resolve(context));
+            const prepared = context.body.text().then((raw) => {
+              // The SDK deserializer assigns map keys to {}, losing __proto__. Keep the JSON map intact.
+              // Buffer the consumed body so the SDK can still deserialize metadata and other fields.
+              context.body = new SelfDecodingBody(Promise.resolve(Buffer.from(raw, 'utf8')));
+              observeData(resourceData(raw));
+              return context;
+            });
+            return new Observable(prepared);
+          },
         },
-        post(context) {
-          if (!observeData || context.httpStatusCode !== 200) return new Observable(Promise.resolve(context));
-          const prepared = context.body.text().then((raw) => {
-            // The SDK deserializer assigns map keys to {}, losing __proto__. Keep the JSON map intact.
-            // Buffer the consumed body so the SDK can still deserialize metadata and other fields.
-            context.body = new SelfDecodingBody(Promise.resolve(Buffer.from(raw, 'utf8')));
-            observeData(resourceData(raw));
-            return context;
-          });
-          return new Observable(prepared);
-        },
-      }],
+      ],
     };
   }
 
-  get timedOut(): boolean { return this.signal?.aborted ?? false; }
+  get timedOut(): boolean {
+    return this.signal?.aborted ?? false;
+  }
 
   async close(): Promise<void> {
     // KubeConfig creates these dispatchers per request. Dispose after body parsing, including errors.
@@ -92,7 +100,10 @@ export class KubernetesConnection {
       }
       const context = this.kubeconfig.getContextObject(this.kubeconfig.getCurrentContext());
       if (!context || !this.kubeconfig.getCurrentCluster()) {
-        throw new WorkloadError('configuration', 'No usable Kubernetes context found. Configure kubeconfig and context.');
+        throw new WorkloadError(
+          'configuration',
+          'No usable Kubernetes context found. Configure kubeconfig and context.',
+        );
       }
       this.namespace = options.namespace ?? context.namespace ?? 'default';
     } catch (error) {
@@ -102,7 +113,12 @@ export class KubernetesConnection {
     }
   }
 
-  private async read<T>(kind: string, name: string, operation: (options: ConfigurationOptions) => Promise<T>, observeData?: DataObserver): Promise<T> {
+  private async read<T>(
+    kind: string,
+    name: string,
+    operation: (options: ConfigurationOptions) => Promise<T>,
+    observeData?: DataObserver,
+  ): Promise<T> {
     const request = new ApiRequest(this.timeoutMs, observeData);
     const location = `${kind} "${name}" in namespace "${this.namespace}"`;
     try {
@@ -111,10 +127,23 @@ export class KubernetesConnection {
       if (error instanceof WorkloadError) throw error;
       if (request.timedOut) throw new WorkloadError('timeout', `Timed out reading ${location}.`);
       switch (statusCode(error)) {
-        case 404: throw new WorkloadError('not-found', `${location} was not found.`);
-        case 401: throw new WorkloadError('unauthorized', `Authentication failed reading ${location}. Check kubeconfig credentials.`);
-        case 403: throw new WorkloadError('forbidden', `Permission denied reading ${location}. Grant get access to this resource.`);
-        default: throw new WorkloadError('read', `Failed to read ${location}. Check connectivity, TLS, and kubeconfig authentication.`);
+        case 404:
+          throw new WorkloadError('not-found', `${location} was not found.`);
+        case 401:
+          throw new WorkloadError(
+            'unauthorized',
+            `Authentication failed reading ${location}. Check kubeconfig credentials.`,
+          );
+        case 403:
+          throw new WorkloadError(
+            'forbidden',
+            `Permission denied reading ${location}. Grant get access to this resource.`,
+          );
+        default:
+          throw new WorkloadError(
+            'read',
+            `Failed to read ${location}. Check connectivity, TLS, and kubeconfig authentication.`,
+          );
       }
     } finally {
       await request.close();
@@ -122,10 +151,14 @@ export class KubernetesConnection {
   }
 
   private async readDataResource<T extends { data?: Record<string, string> }>(
-    kind: 'ConfigMap' | 'Secret', name: string, operation: (options: ConfigurationOptions) => Promise<T>,
+    kind: 'ConfigMap' | 'Secret',
+    name: string,
+    operation: (options: ConfigurationOptions) => Promise<T>,
   ): Promise<T> {
     let data: Record<string, string> | undefined;
-    const resource = await this.read(kind, name, operation, (value) => { data = value; });
+    const resource = await this.read(kind, name, operation, (value) => {
+      data = value;
+    });
     if (data !== undefined) resource.data = data;
     return resource;
   }
@@ -139,11 +172,21 @@ export class KubernetesConnection {
       const request = { name, namespace };
       let spec: V1PodSpec | undefined;
       switch (target.kind) {
-        case 'Deployment': spec = (await apps.readNamespacedDeployment(request, options)).spec?.template.spec; break;
-        case 'StatefulSet': spec = (await apps.readNamespacedStatefulSet(request, options)).spec?.template.spec; break;
-        case 'DaemonSet': spec = (await apps.readNamespacedDaemonSet(request, options)).spec?.template.spec; break;
-        case 'Job': spec = (await batch.readNamespacedJob(request, options)).spec?.template.spec; break;
-        case 'CronJob': spec = (await batch.readNamespacedCronJob(request, options)).spec?.jobTemplate.spec?.template.spec; break;
+        case 'Deployment':
+          spec = (await apps.readNamespacedDeployment(request, options)).spec?.template.spec;
+          break;
+        case 'StatefulSet':
+          spec = (await apps.readNamespacedStatefulSet(request, options)).spec?.template.spec;
+          break;
+        case 'DaemonSet':
+          spec = (await apps.readNamespacedDaemonSet(request, options)).spec?.template.spec;
+          break;
+        case 'Job':
+          spec = (await batch.readNamespacedJob(request, options)).spec?.template.spec;
+          break;
+        case 'CronJob':
+          spec = (await batch.readNamespacedCronJob(request, options)).spec?.jobTemplate.spec?.template.spec;
+          break;
       }
       if (!spec || !Array.isArray(spec.containers) || spec.containers.length === 0) {
         throw new WorkloadError('value', `${target.kind} "${name}" has no usable Pod template containers.`);
@@ -154,11 +197,15 @@ export class KubernetesConnection {
 
   configMap(name: string): Promise<V1ConfigMap> {
     const client = this.kubeconfig.makeApiClient(CoreV1Api);
-    return this.readDataResource('ConfigMap', name, (options) => client.readNamespacedConfigMap({ name, namespace: this.namespace }, options));
+    return this.readDataResource('ConfigMap', name, (options) =>
+      client.readNamespacedConfigMap({ name, namespace: this.namespace }, options),
+    );
   }
 
   secret(name: string): Promise<V1Secret> {
     const client = this.kubeconfig.makeApiClient(CoreV1Api);
-    return this.readDataResource('Secret', name, (options) => client.readNamespacedSecret({ name, namespace: this.namespace }, options));
+    return this.readDataResource('Secret', name, (options) =>
+      client.readNamespacedSecret({ name, namespace: this.namespace }, options),
+    );
   }
 }

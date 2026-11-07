@@ -16,33 +16,56 @@ const [input, output, ...extra] = process.argv.slice(2);
 let temporary: string | undefined;
 
 try {
-  if (!input || !output || extra.length) throw new Error('Usage: varlock-workload-pull <input-directory> <output-file>');
+  if (!input || !output || extra.length)
+    throw new Error('Usage: varlock-workload-pull <input-directory> <output-file>');
   const inputDirectory = await realpath(input);
   if (!(await stat(inputDirectory)).isDirectory()) throw new Error('Input must be a dedicated Varlock directory.');
   const outputFile = resolve(output);
   const outputDirectory = await realpath(dirname(outputFile));
   const pathFromInput = relative(inputDirectory, outputDirectory);
-  if (pathFromInput === '' || (!pathFromInput.startsWith('..' + sep) && pathFromInput !== '..' && !isAbsolute(pathFromInput))) {
-    throw new Error('Output must be outside the Varlock input directory so generated values cannot be read back as overrides.');
+  if (
+    pathFromInput === '' ||
+    (!pathFromInput.startsWith(`..${sep}`) && pathFromInput !== '..' && !isAbsolute(pathFromInput))
+  ) {
+    throw new Error(
+      'Output must be outside the Varlock input directory so generated values cannot be read back as overrides.',
+    );
   }
   const cli = fileURLToPath(new URL('../bin/cli.js', import.meta.resolve('varlock')));
-  let stdout;
+  let stdout: string;
   try {
-    const result = await exec(process.execPath, [cli, 'load', '--path', inputDirectory, '--format', 'json', '--skip-cache'], {
-      encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 60_000,
-    });
+    const result = await exec(
+      process.execPath,
+      [cli, 'load', '--path', inputDirectory, '--format', 'json', '--skip-cache'],
+      {
+        encoding: 'utf8',
+        maxBuffer: 16 * 1024 * 1024,
+        timeout: 60_000,
+      },
+    );
     stdout = result.stdout;
   } catch {
-    throw new Error('Varlock load failed; the existing output was preserved. Diagnose with varlock load --agent --path <input-directory>.');
+    throw new Error(
+      'Varlock load failed; the existing output was preserved. Diagnose with varlock load --agent --path <input-directory>.',
+    );
   }
   let values: unknown;
-  try { values = JSON.parse(stdout); } catch { throw new Error('Varlock returned invalid JSON; the existing output was preserved.'); }
+  try {
+    values = JSON.parse(stdout);
+  } catch {
+    throw new Error('Varlock returned invalid JSON; the existing output was preserved.');
+  }
   if (!isEnvironmentMap(values)) throw new Error('Unexpected Varlock output; the existing output was preserved.');
   const contents = serializeEnvironment(values);
   // The temporary file must share the destination directory for an atomic rename.
   temporary = resolve(outputDirectory, `.varlock-env-${randomUUID()}.tmp`);
   const file = await open(temporary, 'wx', 0o600);
-  try { await file.writeFile(contents); await file.sync(); } finally { await file.close(); }
+  try {
+    await file.writeFile(contents);
+    await file.sync();
+  } finally {
+    await file.close();
+  }
   await rename(temporary, outputFile);
   temporary = undefined;
   process.stdout.write('Environment file updated.\n');

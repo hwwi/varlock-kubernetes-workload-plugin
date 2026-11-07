@@ -11,8 +11,12 @@ const notices = [];
 for (const directory of [...directories].sort()) {
   const metadata = JSON.parse(await readFile(resolve(directory, 'package.json'), 'utf8'));
   const files = (await readdir(directory)).filter((file) => /^(license|copying|notice)([.\-_]|$)/i.test(file)).sort();
-  const texts = await Promise.all(files.map(async (file) => `${file}\n\n${await readFile(resolve(directory, file), 'utf8')}`));
-  notices.push(`## ${metadata.name}@${metadata.version}\n\nLicense: ${metadata.license ?? 'See upstream package'}\n\n${texts.join('\n\n')}`);
+  const texts = await Promise.all(
+    files.map(async (file) => `${file}\n\n${await readFile(resolve(directory, file), 'utf8')}`),
+  );
+  notices.push(
+    `## ${metadata.name}@${metadata.version}\n\nLicense: ${metadata.license ?? 'See upstream package'}\n\n${texts.join('\n\n')}`,
+  );
 }
 await writeFile('dist/BUNDLED_LICENSES.md', `# Bundled dependency notices\n\n${notices.join('\n\n---\n\n')}\n`);
 process.stdout.write(`Bundled notices: ${notices.length} packages.\n`);

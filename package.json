@@ -35,9 +35,12 @@
   ],
   "scripts": {
     "build": "tsdown && node scripts/bundle-licenses.mjs",
+    "lint": "biome lint --error-on-warnings",
+    "format": "biome format --write",
+    "format:check": "biome format",
     "typecheck": "tsc --noEmit",
     "test": "pnpm build && vitest run --project default",
-    "check": "pnpm typecheck && pnpm test",
+    "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test",
     "prepack": "pnpm build",
     "test:cluster": "pnpm build && vitest run --project cluster",
     "test:package": "vitest run --project package"
@@ -46,6 +49,7 @@
     "varlock": ">=1.24.0 <1.25.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.6.6",
     "@kubernetes/client-node": "2.0.2",
     "@next/env": "16.2.6",
     "@types/node": "^22.18.0",

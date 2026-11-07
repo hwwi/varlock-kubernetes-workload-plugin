@@ -13,7 +13,11 @@ const resourcePaths: Record<WorkloadKind, string> = {
   CronJob: '/apis/batch/v1/namespaces',
 };
 const plurals: Record<WorkloadKind, string> = {
-  Deployment: 'deployments', StatefulSet: 'statefulsets', DaemonSet: 'daemonsets', Job: 'jobs', CronJob: 'cronjobs',
+  Deployment: 'deployments',
+  StatefulSet: 'statefulsets',
+  DaemonSet: 'daemonsets',
+  Job: 'jobs',
+  CronJob: 'cronjobs',
 };
 
 export interface ApiResponse {
@@ -30,7 +34,8 @@ export async function createApi() {
     const url = new URL(request.url ?? '/', 'http://localhost');
     const path = url.pathname;
     requests.push({ method: request.method, path, authorization: request.headers.authorization });
-    const entry = responses.get(`${path}${url.search}`) ?? responses.get(path) ?? { status: 404, body: { kind: 'Status', message: 'not found', code: 404 } };
+    const entry = responses.get(`${path}${url.search}`) ??
+      responses.get(path) ?? { status: 404, body: { kind: 'Status', message: 'not found', code: 404 } };
     const send = () => {
       response.writeHead(entry.status ?? 200, { 'content-type': 'application/json' });
       response.end(JSON.stringify(entry.body));
@@ -43,41 +48,66 @@ export async function createApi() {
   if (typeof address !== 'object' || !address) throw new Error('No test server address');
   const serverUrl = `http://127.0.0.1:${address.port}`;
   const kubeconfig = join(directory, 'kubeconfig.json');
-  await writeFile(kubeconfig, JSON.stringify({
-    apiVersion: 'v1', kind: 'Config',
-    clusters: [{ name: 'test', cluster: { server: serverUrl, 'insecure-skip-tls-verify': true } }],
-    users: [{ name: 'test', user: { token: 'test-token' } }],
-    contexts: [
-      { name: 'test', context: { cluster: 'test', user: 'test', namespace: 'test' } },
-      { name: 'other', context: { cluster: 'test', user: 'test', namespace: 'other' } },
-    ],
-    'current-context': 'test',
-  }));
+  await writeFile(
+    kubeconfig,
+    JSON.stringify({
+      apiVersion: 'v1',
+      kind: 'Config',
+      clusters: [{ name: 'test', cluster: { server: serverUrl, 'insecure-skip-tls-verify': true } }],
+      users: [{ name: 'test', user: { token: 'test-token' } }],
+      contexts: [
+        { name: 'test', context: { cluster: 'test', user: 'test', namespace: 'test' } },
+        { name: 'other', context: { cluster: 'test', user: 'test', namespace: 'other' } },
+      ],
+      'current-context': 'test',
+    }),
+  );
 
   return {
-    directory, kubeconfig, serverUrl, requests, responses,
+    directory,
+    kubeconfig,
+    serverUrl,
+    requests,
+    responses,
     openConnections(): Promise<number> {
-      return new Promise((resolve, reject) => server.getConnections((error, count) => error ? reject(error) : resolve(count)));
+      return new Promise((resolve, reject) =>
+        server.getConnections((error, count) => (error ? reject(error) : resolve(count))),
+      );
     },
     workload(kind: WorkloadKind, containers: V1Container[], namespace = 'test', name = 'app') {
-      const template = { spec: { containers, initContainers: [{ name: 'init', env: [{ name: 'INIT_ONLY', value: 'excluded' }] }] } };
+      const template = {
+        spec: { containers, initContainers: [{ name: 'init', env: [{ name: 'INIT_ONLY', value: 'excluded' }] }] },
+      };
       const resourcePath = `${resourcePaths[kind]}/${namespace}/${plurals[kind]}/${name}`;
-      responses.set(resourcePath, { body: {
-        apiVersion: kind === 'CronJob' || kind === 'Job' ? 'batch/v1' : 'apps/v1', kind,
-        metadata: { name, namespace },
-        spec: kind === 'CronJob' ? { jobTemplate: { spec: { template } } } : { template },
-      } });
+      responses.set(resourcePath, {
+        body: {
+          apiVersion: kind === 'CronJob' || kind === 'Job' ? 'batch/v1' : 'apps/v1',
+          kind,
+          metadata: { name, namespace },
+          spec: kind === 'CronJob' ? { jobTemplate: { spec: { template } } } : { template },
+        },
+      });
       return resourcePath;
     },
     configMap(name: string, data: Record<string, string>, binaryData: Record<string, string> = {}, namespace = 'test') {
-      responses.set(`/api/v1/namespaces/${namespace}/configmaps/${name}`, { body: { apiVersion: 'v1', kind: 'ConfigMap', data, binaryData } });
+      responses.set(`/api/v1/namespaces/${namespace}/configmaps/${name}`, {
+        body: { apiVersion: 'v1', kind: 'ConfigMap', data, binaryData },
+      });
     },
     secret(name: string, data: Record<string, string>, namespace = 'test') {
-      responses.set(`/api/v1/namespaces/${namespace}/secrets/${name}`, { body: { apiVersion: 'v1', kind: 'Secret', data: Object.fromEntries(Object.entries(data).map(([key, value]) => [key, Buffer.from(value).toString('base64')])) } });
+      responses.set(`/api/v1/namespaces/${namespace}/secrets/${name}`, {
+        body: {
+          apiVersion: 'v1',
+          kind: 'Secret',
+          data: Object.fromEntries(
+            Object.entries(data).map(([key, value]) => [key, Buffer.from(value).toString('base64')]),
+          ),
+        },
+      });
     },
     async close() {
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
       await rm(directory, { recursive: true, force: true });
     },
   };

@@ -24,8 +24,12 @@ function isReleasePullRequest(pull: unknown, repository: string): boolean {
   if (!object(pull) || !object(pull.user) || !object(pull.base) || !object(pull.head)) return false;
   if (pull.user.login !== releaseBot || pull.user.type !== 'Bot' || pull.base.ref !== 'main') return false;
   if (!object(pull.base.repo) || !object(pull.head.repo)) return false;
-  return pull.base.repo.full_name === repository && pull.head.repo.full_name === repository &&
-    typeof pull.head.ref === 'string' && pull.head.ref.startsWith('release-please--branches--main--components--');
+  return (
+    pull.base.repo.full_name === repository &&
+    pull.head.repo.full_name === repository &&
+    typeof pull.head.ref === 'string' &&
+    pull.head.ref.startsWith('release-please--branches--main--components--')
+  );
 }
 
 async function isReleaseMerge(before: string, commit: string, repository: string): Promise<boolean> {
@@ -41,9 +45,16 @@ async function isReleaseMerge(before: string, commit: string, repository: string
   });
   if (!response.ok) throw new Error('Could not look up the merged release PR.');
   const pulls: unknown = await response.json();
-  return Array.isArray(pulls) && pulls.some((pull: unknown) =>
-    object(pull) && typeof pull.merged_at === 'string' && pull.merge_commit_sha === commit &&
-    isReleasePullRequest(pull, repository));
+  return (
+    Array.isArray(pulls) &&
+    pulls.some(
+      (pull: unknown) =>
+        object(pull) &&
+        typeof pull.merged_at === 'string' &&
+        pull.merge_commit_sha === commit &&
+        isReleasePullRequest(pull, repository),
+    )
+  );
 }
 
 async function changesOnlyReleaseVersion(before: string, after: string): Promise<boolean> {
@@ -53,8 +64,10 @@ async function changesOnlyReleaseVersion(before: string, after: string): Promise
     return decoder.decode(stdout);
   };
   const [previousPackage, nextPackage, manifest, changelog, fileChanges] = await Promise.all([
-    read(before, 'package.json'), read(after, 'package.json'),
-    read(after, '.release-please-manifest.json'), read(after, 'CHANGELOG.md'),
+    read(before, 'package.json'),
+    read(after, 'package.json'),
+    read(after, '.release-please-manifest.json'),
+    read(after, 'CHANGELOG.md'),
     exec('git', ['diff', '--summary', '--no-renames', before, after, '--']),
   ]);
   if (fileChanges.stdout !== '') return false;
@@ -72,9 +85,14 @@ async function changesOnlyReleaseVersion(before: string, after: string): Promise
     versionPrefix + JSON.stringify(previousVersion),
     versionPrefix + JSON.stringify(version),
   );
-  return expectedPackage === nextPackage &&
+  return (
+    expectedPackage === nextPackage &&
     isDeepStrictEqual(nextManifest, { '.': version }) &&
-    changelog.split('\n').find((line) => line.startsWith('## '))?.startsWith(`## [${version}]`) === true;
+    changelog
+      .split('\n')
+      .find((line) => line.startsWith('## '))
+      ?.startsWith(`## [${version}]`) === true
+  );
 }
 
 export async function shouldRunChecks(): Promise<boolean> {
@@ -110,7 +128,8 @@ export async function shouldRunChecks(): Promise<boolean> {
     }
     // Include both paths of renames and use NUL delimiters for arbitrary filenames.
     const { stdout } = await exec('git', ['diff', '--name-status', '--no-renames', '-z', before, after, '--'], {
-      maxBuffer: 16 * 1024 * 1024, timeout: 15_000,
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 15_000,
     });
     const entries = stdout.split('\0').slice(0, -1);
     const paths = entries.filter((_, index) => index % 2 === 1);
@@ -119,13 +138,20 @@ export async function shouldRunChecks(): Promise<boolean> {
       console.log('Only documentation changed; skipping tests.');
       return false;
     }
-    if (!repository || paths.length !== releaseFiles.length ||
+    if (
+      !repository ||
+      paths.length !== releaseFiles.length ||
       !paths.every((path) => releaseFiles.includes(path)) ||
-      !entries.every((entry, index) => index % 2 === 1 || entry === 'M')) return true;
-    if (!await changesOnlyReleaseVersion(before, after)) return true;
-    const verified = event === 'pull_request'
-      ? releasePull
-      : payload.ref === 'refs/heads/main' && payload.forced === false && await isReleaseMerge(before, after, repository);
+      !entries.every((entry, index) => index % 2 === 1 || entry === 'M')
+    )
+      return true;
+    if (!(await changesOnlyReleaseVersion(before, after))) return true;
+    const verified =
+      event === 'pull_request'
+        ? releasePull
+        : payload.ref === 'refs/heads/main' &&
+          payload.forced === false &&
+          (await isReleaseMerge(before, after, repository));
     if (verified) console.log('Only release metadata changed; deferring full checks to the release tag.');
     return !verified;
   } catch {
@@ -142,7 +168,9 @@ async function main(): Promise<void> {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { await main(); } catch (error) {
+  try {
+    await main();
+  } catch (error) {
     console.error(error instanceof Error ? error.message : 'CI change detection failed.');
     process.exitCode = 1;
   }

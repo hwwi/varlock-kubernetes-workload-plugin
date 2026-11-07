@@ -10,7 +10,9 @@ const packageName = '@hwwi/kubernetes-workload-plugin';
 const repository = 'hwwi/varlock-kubernetes-workload-plugin';
 const number = '(0|[1-9][0-9]*)';
 const prereleaseId = '(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)';
-const versionPattern = new RegExp(`^${number}\\.${number}\\.${number}(?:-(${prereleaseId}(?:\\.${prereleaseId})*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`);
+const versionPattern = new RegExp(
+  `^${number}\\.${number}\\.${number}(?:-(${prereleaseId}(?:\\.${prereleaseId})*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`,
+);
 type VersionCore = readonly [bigint, bigint, bigint];
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -20,15 +22,18 @@ function object(value: unknown): value is Record<string, unknown> {
 function parseVersion(value: string): { core: VersionCore; prerelease: boolean } {
   const match = versionPattern.exec(value);
   const [, major, minor, patch, prerelease] = match ?? [];
-  if (match?.[0] !== value || !major || !minor || !patch) throw new Error(`Expected a valid SemVer version, received ${value}.`);
+  if (match?.[0] !== value || !major || !minor || !patch)
+    throw new Error(`Expected a valid SemVer version, received ${value}.`);
   const core: VersionCore = [BigInt(major), BigInt(minor), BigInt(patch)];
-  if (core.some((part) => part > BigInt(Number.MAX_SAFE_INTEGER))) throw new Error('Version components exceed the SemVer limit.');
+  if (core.some((part) => part > BigInt(Number.MAX_SAFE_INTEGER)))
+    throw new Error('Version components exceed the SemVer limit.');
   return { core, prerelease: prerelease !== undefined };
 }
 
 export function releaseVersion(value: string): VersionCore {
   const parsed = parseVersion(value);
-  if (parsed.prerelease || value.includes('+')) throw new Error(`Expected an X.Y.Z release version, received ${value}.`);
+  if (parsed.prerelease || value.includes('+'))
+    throw new Error(`Expected an X.Y.Z release version, received ${value}.`);
   return parsed.core;
 }
 
@@ -85,7 +90,8 @@ export async function validateRelease(): Promise<{ tag: string; version: string;
   await exec('git', ['merge-base', '--is-ancestor', sha, 'origin/main']);
   checkPackage(await jsonFile('package.json'), version);
   const manifest = await jsonFile('.release-please-manifest.json');
-  if (!object(manifest) || manifest['.'] !== version) throw new Error('Release manifest version does not match the tag.');
+  if (!object(manifest) || manifest['.'] !== version)
+    throw new Error('Release manifest version does not match the tag.');
   const api = (process.env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/$/, '');
   const release = await requestJson(`${api}/repos/${repository}/releases/tags/${encodeURIComponent(tag)}`, {
     authorization: `Bearer ${environment('GH_TOKEN')}`,
@@ -129,10 +135,16 @@ async function checkArtifact(directory: string, version: string): Promise<{ tarb
   const { stdout } = await exec('tar', ['-xOzf', tarball, 'package/package.json'], { maxBuffer: 1024 * 1024 });
   const metadata: unknown = JSON.parse(stdout);
   checkPackage(metadata, version);
-  const integrity = `sha512-${createHash('sha512').update(await readFile(tarball)).digest('base64')}`;
+  const integrity = `sha512-${createHash('sha512')
+    .update(await readFile(tarball))
+    .digest('base64')}`;
   const registry = (process.env.RELEASE_REGISTRY_URL ?? 'https://registry.npmjs.org').replace(/\/$/, '');
   // Use npm's pre-write metadata read to avoid cached versions and dist-tags.
-  const published = await requestJson(`${registry}/${encodeURIComponent(packageName)}?write=true`, { 'cache-control': 'no-cache' }, true);
+  const published = await requestJson(
+    `${registry}/${encodeURIComponent(packageName)}?write=true`,
+    { 'cache-control': 'no-cache' },
+    true,
+  );
   return { tarball, publish: publicationDecision(published, version, integrity) };
 }
 
@@ -147,7 +159,11 @@ async function main(): Promise<void> {
     const result = await checkArtifact(directory ?? 'artifacts', release.version);
     outputs.tarball = result.tarball;
     outputs.publish = String(result.publish);
-    console.log(result.publish ? `Ready to publish ${packageName}@${release.version}.` : 'Identical package is already published; no tag changes are needed.');
+    console.log(
+      result.publish
+        ? `Ready to publish ${packageName}@${release.version}.`
+        : 'Identical package is already published; no tag changes are needed.',
+    );
   } else {
     console.log(`Validated ${release.tag} at ${release.sha}.`);
   }
@@ -156,11 +172,18 @@ async function main(): Promise<void> {
   for (const value of Object.values(outputs)) {
     if (/[\r\n]/.test(value)) throw new Error('Release output contains a line break.');
   }
-  await appendFile(output, Object.entries(outputs).map(([key, value]) => `${key}=${value}\n`).join(''));
+  await appendFile(
+    output,
+    Object.entries(outputs)
+      .map(([key, value]) => `${key}=${value}\n`)
+      .join(''),
+  );
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { await main(); } catch (error) {
+  try {
+    await main();
+  } catch (error) {
     console.error(error instanceof Error ? error.message : 'Release validation failed.');
     process.exitCode = 1;
   }

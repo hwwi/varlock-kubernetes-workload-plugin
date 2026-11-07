@@ -1,0 +1,30 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.6/schema.json",
+  "files": {
+    "includes": [
+      "src/**/*.{js,cjs,mjs,ts,cts,mts}",
+      "test/**/*.{js,cjs,mjs,ts,cts,mts}",
+      "scripts/**/*.{js,cjs,mjs,ts,cts,mts}",
+      "tsdown.config.ts",
+      "vitest.config.ts",
+      "biome.json",
+      "package.json",
+      "release-please-config.json",
+      "tsconfig.json"
+    ]
+  },
+  "formatter": {
+    "useEditorconfig": true,
+    "lineWidth": 120
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single"
+    }
+  },
+  "json": {
+    "assist": {
+      "enabled": false
+    }
+  }
+}

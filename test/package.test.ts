@@ -17,7 +17,9 @@ test('installs the tarball and checks the release command', async () => {
     if (!packedArtifacts) {
       await mkdir(artifacts);
       await exec('pnpm', ['pack', '--pack-destination', artifacts], {
-        cwd: root, timeout: 60_000, maxBuffer: 4 * 1024 * 1024,
+        cwd: root,
+        timeout: 60_000,
+        maxBuffer: 4 * 1024 * 1024,
       });
     }
     const tarballs = (await readdir(artifacts)).filter((file) => file.endsWith('.tgz'));
@@ -28,56 +30,89 @@ test('installs the tarball and checks the release command', async () => {
     const consumer = join(api.directory, 'consumer');
     await mkdir(consumer);
     await writeFile(join(consumer, 'package.json'), JSON.stringify({ private: true }));
-    await exec('pnpm', [
-      'add', '-D', tarballPath, 'varlock@1.24.0', '--ignore-scripts',
-      '--store-dir', process.env.WORKLOAD_PNPM_STORE ?? join(api.directory, 'store'),
-    ], { cwd: consumer, timeout: 60_000, maxBuffer: 4 * 1024 * 1024 });
+    await exec(
+      'pnpm',
+      [
+        'add',
+        '-D',
+        tarballPath,
+        'varlock@1.24.0',
+        '--ignore-scripts',
+        '--store-dir',
+        process.env.WORKLOAD_PNPM_STORE ?? join(api.directory, 'store'),
+      ],
+      { cwd: consumer, timeout: 60_000, maxBuffer: 4 * 1024 * 1024 },
+    );
 
     const input = join(consumer, 'env');
     await mkdir(input);
-    await writeFile(join(input, '.env.schema'), [
-      '# @plugin(@hwwi/kubernetes-workload-plugin)',
-      `# @initK8sWorkload(kubeconfig=${JSON.stringify(api.kubeconfig)}, defaultKind=Deployment, defaultName=app)`,
-      '# @setValuesBulk(k8sWorkloadEnv(),format=json)',
-      '# ---',
-      'PACKAGE_TEST=',
-      'LOCAL_PACKAGE_TEST=k8sWorkloadEnvValue(key=PACKAGE_TEST)',
-      '# @required=false', 'OPTIONAL=k8sWorkloadEnvValue(allowMissing=true)',
-      '',
-    ].join('\n'));
+    await writeFile(
+      join(input, '.env.schema'),
+      [
+        '# @plugin(@hwwi/kubernetes-workload-plugin)',
+        `# @initK8sWorkload(kubeconfig=${JSON.stringify(api.kubeconfig)}, defaultKind=Deployment, defaultName=app)`,
+        '# @setValuesBulk(k8sWorkloadEnv(),format=json)',
+        '# ---',
+        'PACKAGE_TEST=',
+        'LOCAL_PACKAGE_TEST=k8sWorkloadEnvValue(key=PACKAGE_TEST)',
+        '# @required=false',
+        'OPTIONAL=k8sWorkloadEnvValue(allowMissing=true)',
+        '',
+      ].join('\n'),
+    );
 
     const output = join(consumer, '.env.local');
     const result = await exec('pnpm', ['exec', 'varlock-workload-pull', input, output], {
-      cwd: consumer, env: { ...process.env, DO_NOT_TRACK: '1' }, timeout: 30_000,
+      cwd: consumer,
+      env: { ...process.env, DO_NOT_TRACK: '1' },
+      timeout: 30_000,
     });
     expect(result.stdout).not.toContain('installed-tarball');
-    expect(await readFile(output, 'utf8')).toBe("PACKAGE_TEST='installed-tarball'\nLOCAL_PACKAGE_TEST='installed-tarball'\n");
+    expect(await readFile(output, 'utf8')).toBe(
+      "PACKAGE_TEST='installed-tarball'\nLOCAL_PACKAGE_TEST='installed-tarball'\n",
+    );
     expect(api.requests).toHaveLength(1);
     expect(api.requests[0]).toMatchObject({ method: 'GET', path: '/apis/apps/v1/namespaces/test/deployments/app' });
 
     // Exercise the workflow commands with a relative tarball path.
     const workflow = await readFile(join(root, '.github/workflows/release.yml'), 'utf8');
-    const publishCommands = workflow.split('\n').map((line) => line.trim().replace(/^run:\s*/, ''))
+    const publishCommands = workflow
+      .split('\n')
+      .map((line) => line.trim().replace(/^run:\s*/, ''))
       .filter((line) => /^npm (?:stage )?publish /.test(line));
     expect(publishCommands).toHaveLength(1);
     const npmrc = join(api.directory, 'empty.npmrc');
     await writeFile(npmrc, '');
     for (const command of publishCommands) {
-      const result = await exec('bash', ['-e', '-c', `${command} --dry-run --json --registry "$TEST_NPM_REGISTRY" --userconfig "$TEST_NPM_USERCONFIG" --cache "$TEST_NPM_CACHE"`], {
-        cwd: api.directory,
-        env: {
-          ...process.env, NODE_AUTH_TOKEN: '', GIT_SSH_COMMAND: 'false',
-          RELEASE_TARBALL: `./${relative(api.directory, tarballPath)}`,
-          TEST_NPM_REGISTRY: api.serverUrl, TEST_NPM_USERCONFIG: npmrc,
-          TEST_NPM_CACHE: join(api.directory, 'npm-cache'),
+      const result = await exec(
+        'bash',
+        [
+          '-e',
+          '-c',
+          `${command} --dry-run --json --registry "$TEST_NPM_REGISTRY" --userconfig "$TEST_NPM_USERCONFIG" --cache "$TEST_NPM_CACHE"`,
+        ],
+        {
+          cwd: api.directory,
+          env: {
+            ...process.env,
+            NODE_AUTH_TOKEN: '',
+            GIT_SSH_COMMAND: 'false',
+            RELEASE_TARBALL: `./${relative(api.directory, tarballPath)}`,
+            TEST_NPM_REGISTRY: api.serverUrl,
+            TEST_NPM_USERCONFIG: npmrc,
+            TEST_NPM_CACHE: join(api.directory, 'npm-cache'),
+          },
+          timeout: 30_000,
+          maxBuffer: 4 * 1024 * 1024,
         },
-        timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
-      });
+      );
       const publication: unknown = JSON.parse(result.stdout);
       const packageName = '@hwwi/kubernetes-workload-plugin';
       // npm 10 returns one package directly; npm 11 keys results by package name.
-      const publishedPackage = publication && typeof publication === 'object' && packageName in publication
-        ? publication[packageName] : publication;
+      const publishedPackage =
+        publication && typeof publication === 'object' && packageName in publication
+          ? publication[packageName]
+          : publication;
       expect(publishedPackage).toMatchObject({ name: packageName });
       expect(result.stderr).toContain('tag latest and public access (dry-run)');
     }

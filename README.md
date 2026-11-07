@@ -280,7 +280,8 @@ pnpm check
 pnpm test:package
 ```
 
-`check` runs type checking, builds, and tests, including the actual Varlock CLI and Next.js 16.2.6 env loader.
+`check` runs Biome lint and format checks, TypeScript type checking, builds, and tests, including the actual Varlock CLI and Next.js 16.2.6 env loader.
+Use `pnpm format` to format the project's JavaScript and TypeScript files and hand-maintained JSON configuration.
 `test:package` installs a tarball in a separate project and checks the packaged plugin and CLI.
 CI skips tests for changes limited to `README.md`, `AGENTS.md`, and `docs/`; release validation always runs all checks.
 

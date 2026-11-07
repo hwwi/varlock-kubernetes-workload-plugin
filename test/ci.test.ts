@@ -22,11 +22,14 @@ const repository = 'hwwi/varlock-kubernetes-workload-plugin';
 const releasePull = {
   user: { login: 'hwwi-release-bot[bot]', type: 'Bot' },
   base: { ref: 'main', repo: { full_name: repository } },
-  head: { ref: 'release-please--branches--main--components--kubernetes-workload-plugin', repo: { full_name: repository } },
+  head: {
+    ref: 'release-please--branches--main--components--kubernetes-workload-plugin',
+    repo: { full_name: repository },
+  },
 };
 
 function packageJson(version: string, fields: Record<string, unknown> = {}): string {
-  return JSON.stringify({ name: 'fixture', version, ...fields }, null, 2) + '\n';
+  return `${JSON.stringify({ name: 'fixture', version, ...fields }, null, 2)}\n`;
 }
 
 async function fixture(packageFields = {}, version = '0.1.0-beta.2') {
@@ -41,13 +44,37 @@ async function fixture(packageFields = {}, version = '0.1.0-beta.2') {
   };
   const commit = async () => {
     await git('add', '-A');
-    await git('-c', 'user.name=CI Test', '-c', 'user.email=ci@example.test', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'test: change fixture');
+    await git(
+      '-c',
+      'user.name=CI Test',
+      '-c',
+      'user.email=ci@example.test',
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '-qm',
+      'test: change fixture',
+    );
     return (await git('rev-parse', 'HEAD')).stdout.trim();
   };
   const mergePreview = async (base: string, head: string) => {
     const tree = (await git('merge-tree', '--write-tree', base, head)).stdout.trim();
-    return (await git('-c', 'user.name=CI Test', '-c', 'user.email=ci@example.test',
-      'commit-tree', tree, '-p', base, '-p', head, '-m', 'test: preview merge')).stdout.trim();
+    return (
+      await git(
+        '-c',
+        'user.name=CI Test',
+        '-c',
+        'user.email=ci@example.test',
+        'commit-tree',
+        tree,
+        '-p',
+        base,
+        '-p',
+        head,
+        '-m',
+        'test: preview merge',
+      )
+    ).stdout.trim();
   };
   await git('init', '-q', '-b', 'main');
   await git('config', 'core.hooksPath', '/dev/null');
@@ -60,13 +87,27 @@ async function fixture(packageFields = {}, version = '0.1.0-beta.2') {
   const output = join(directory, 'output');
   const run = async (event = 'push', overrides: Record<string, string> = {}, payload?: unknown) => {
     const head = (await git('rev-parse', 'HEAD')).stdout.trim();
-    await writeFile(eventPath, JSON.stringify(payload ?? (event === 'pull_request'
-      ? { pull_request: { base: { sha: base }, head: { sha: head } } }
-      : { before: base, after: head })));
+    await writeFile(
+      eventPath,
+      JSON.stringify(
+        payload ??
+          (event === 'pull_request'
+            ? { pull_request: { base: { sha: base }, head: { sha: head } } }
+            : { before: base, after: head }),
+      ),
+    );
     await writeFile(output, '');
     const result = await exec(process.execPath, [script], {
-      cwd, timeout: 20_000,
-      env: { ...process.env, GITHUB_EVENT_NAME: event, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: output, CI_FULL_CHECK: 'false', ...overrides },
+      cwd,
+      timeout: 20_000,
+      env: {
+        ...process.env,
+        GITHUB_EVENT_NAME: event,
+        GITHUB_EVENT_PATH: eventPath,
+        GITHUB_OUTPUT: output,
+        CI_FULL_CHECK: 'false',
+        ...overrides,
+      },
     });
     return { output: await readFile(output, 'utf8'), ...result };
   };
@@ -74,8 +115,12 @@ async function fixture(packageFields = {}, version = '0.1.0-beta.2') {
 }
 
 async function releaseFixture({
-  packageFields = {}, previousPackageFields = {}, previousVersion = '0.1.0-beta.2',
-  version = '0.1.0', manifestVersion = version, rewritePackage = (text) => text,
+  packageFields = {},
+  previousPackageFields = {},
+  previousVersion = '0.1.0-beta.2',
+  version = '0.1.0',
+  manifestVersion = version,
+  rewritePackage = (text) => text,
 }: {
   packageFields?: Record<string, unknown>;
   previousPackageFields?: Record<string, unknown>;
@@ -101,26 +146,31 @@ test('skips heavy tests on a version-only release PR unless full checks are requ
   expect((await f.run('pull_request', { ...f.env, CI_FULL_CHECK: 'true' }, payload)).output).toBe('run-tests=true\n');
 });
 
-test.each(['README.md', 'package.json'])('checks the release PR against the current base after %s changes there', async (path) => {
-  const f = await releaseFixture();
-  await f.git('checkout', '-qb', 'new-base', f.base);
-  if (path === 'package.json') {
-    await f.write('package.json', packageJson('0.1.0'));
-    await f.write('.release-please-manifest.json', JSON.stringify({ '.': '0.1.0' }));
-  } else {
-    await f.write(path);
-  }
-  const base = await f.commit();
-  const pull = { ...f.pull, base: { ...f.pull.base, sha: base } };
-  const env = { ...f.env, GITHUB_SHA: await f.mergePreview(base, f.head) };
-  expect((await f.run('pull_request', env, { pull_request: pull })).output)
-    .toBe(`run-tests=${path === 'package.json'}\n`);
-});
+test.each(['README.md', 'package.json'])(
+  'checks the release PR against the current base after %s changes there',
+  async (path) => {
+    const f = await releaseFixture();
+    await f.git('checkout', '-qb', 'new-base', f.base);
+    if (path === 'package.json') {
+      await f.write('package.json', packageJson('0.1.0'));
+      await f.write('.release-please-manifest.json', JSON.stringify({ '.': '0.1.0' }));
+    } else {
+      await f.write(path);
+    }
+    const base = await f.commit();
+    const pull = { ...f.pull, base: { ...f.pull.base, sha: base } };
+    const env = { ...f.env, GITHUB_SHA: await f.mergePreview(base, f.head) };
+    expect((await f.run('pull_request', env, { pull_request: pull })).output).toBe(
+      `run-tests=${path === 'package.json'}\n`,
+    );
+  },
+);
 
 test('runs all checks when the release PR merge preview does not match its head', async () => {
   const f = await releaseFixture();
-  expect((await f.run('pull_request', { ...f.env, GITHUB_SHA: f.head }, { pull_request: f.pull })).output)
-    .toBe('run-tests=true\n');
+  expect((await f.run('pull_request', { ...f.env, GITHUB_SHA: f.head }, { pull_request: f.pull })).output).toBe(
+    'run-tests=true\n',
+  );
 });
 
 test.each([
@@ -128,20 +178,29 @@ test.each([
   ['versions differ', { manifestVersion: '0.2.0' }],
   ['the version decreases', { previousVersion: '0.2.0' }],
   ['a version component exceeds the SemVer limit', { version: '9007199254740992.0.0' }],
-  ['conditional exports change order', {
-    previousPackageFields: { exports: { import: './import.js', default: './fallback.js' } },
-    packageFields: { exports: { default: './fallback.js', import: './import.js' } },
-  }],
-  ['the exports key is escaped', {
-    previousPackageFields: { exports: './entry.js' },
-    packageFields: { exports: './entry.js' },
-    rewritePackage: (text: string) => text.replace('"exports"', '"expor\\u0074s"'),
-  }],
-  ['a blocked export changes to an invalid target', {
-    previousPackageFields: { exports: { '.': null } },
-    packageFields: { exports: { '.': null } },
-    rewritePackage: (text: string) => text.replace('null', '1e400'),
-  }],
+  [
+    'conditional exports change order',
+    {
+      previousPackageFields: { exports: { import: './import.js', default: './fallback.js' } },
+      packageFields: { exports: { default: './fallback.js', import: './import.js' } },
+    },
+  ],
+  [
+    'the exports key is escaped',
+    {
+      previousPackageFields: { exports: './entry.js' },
+      packageFields: { exports: './entry.js' },
+      rewritePackage: (text: string) => text.replace('"exports"', '"expor\\u0074s"'),
+    },
+  ],
+  [
+    'a blocked export changes to an invalid target',
+    {
+      previousPackageFields: { exports: { '.': null } },
+      packageFields: { exports: { '.': null } },
+      rewritePackage: (text: string) => text.replace('null', '1e400'),
+    },
+  ],
 ])('runs all checks on a release PR when %s', async (_reason, options) => {
   const f = await releaseFixture(options);
   expect((await f.run('pull_request', f.env, { pull_request: f.pull })).output).toBe('run-tests=true\n');
@@ -150,8 +209,17 @@ test.each([
 test('runs all checks when a release PR also changes a file mode', async () => {
   const f = await releaseFixture();
   await f.git('update-index', '--chmod=+x', 'package.json');
-  await f.git('-c', 'user.name=CI Test', '-c', 'user.email=ci@example.test', '-c', 'commit.gpgsign=false',
-    'commit', '-qm', 'test: change package file mode');
+  await f.git(
+    '-c',
+    'user.name=CI Test',
+    '-c',
+    'user.email=ci@example.test',
+    '-c',
+    'commit.gpgsign=false',
+    'commit',
+    '-qm',
+    'test: change package file mode',
+  );
   const head = (await f.git('rev-parse', 'HEAD')).stdout.trim();
   const pull = { ...f.pull, head: { ...f.pull.head, sha: head } };
   const env = { ...f.env, GITHUB_SHA: await f.mergePreview(f.base, head) };
@@ -191,8 +259,9 @@ test('runs all checks when a release-looking push also contains a code change', 
   const api = await createApi();
   apis.push(api);
   const env = { ...f.env, GITHUB_API_URL: api.serverUrl, GH_TOKEN: 'fake-token' };
-  expect((await f.run('push', env, { before: f.base, after: head, ref: 'refs/heads/main', forced: false })).output)
-    .toBe('run-tests=true\n');
+  expect(
+    (await f.run('push', env, { before: f.base, after: head, ref: 'refs/heads/main', forced: false })).output,
+  ).toBe('run-tests=true\n');
   expect(api.requests).toEqual([]);
 });
 
@@ -221,7 +290,16 @@ test.each(['push', 'pull_request'])('skips tests for documentation-only %s chang
   expect((await f.run(event)).output).toBe('run-tests=false\n');
 });
 
-test.each(['src/plugin.ts', 'package.json', 'pnpm-lock.yaml', '.node-version', '.github/workflows/ci.yml', 'scripts/release.ts', 'examples/env/.env.schema', 'CHANGELOG.md'])('runs tests when %s changes alongside documentation', async (path) => {
+test.each([
+  'src/plugin.ts',
+  'package.json',
+  'pnpm-lock.yaml',
+  '.node-version',
+  '.github/workflows/ci.yml',
+  'scripts/release.ts',
+  'examples/env/.env.schema',
+  'CHANGELOG.md',
+])('runs tests when %s changes alongside documentation', async (path) => {
   const f = await fixture();
   await f.write('README.md');
   await f.write(path);
@@ -247,7 +325,9 @@ test('compares a PR against its merge base without unrelated changes on main', a
   await f.write('src/plugin.ts');
   const base = await f.commit();
   await f.git('checkout', '-q', 'feature');
-  expect((await f.run('pull_request', {}, { pull_request: { base: { sha: base }, head: { sha: head } } })).output).toBe('run-tests=false\n');
+  expect((await f.run('pull_request', {}, { pull_request: { base: { sha: base }, head: { sha: head } } })).output).toBe(
+    'run-tests=false\n',
+  );
 });
 
 test.each([
@@ -261,7 +341,10 @@ test.each([
   expect((await f.run()).output).toBe(`run-tests=${expected}\n`);
 });
 
-test.each([['src/plugin.ts', 'true'], ['docs/guide.md', 'false']])('handles deletion of %s', async (path, expected) => {
+test.each([
+  ['src/plugin.ts', 'true'],
+  ['docs/guide.md', 'false'],
+])('handles deletion of %s', async (path, expected) => {
   const f = await fixture();
   await f.git('rm', path);
   await f.commit();
@@ -281,7 +364,9 @@ test('forces all release checks even with documentation-only or unavailable even
   await f.write('README.md');
   await f.commit();
   expect((await f.run('push', { CI_FULL_CHECK: 'true' })).output).toBe('run-tests=true\n');
-  expect((await f.run('workflow_dispatch', { CI_FULL_CHECK: 'true', GITHUB_EVENT_PATH: '/missing' })).output).toBe('run-tests=true\n');
+  expect((await f.run('workflow_dispatch', { CI_FULL_CHECK: 'true', GITHUB_EVENT_PATH: '/missing' })).output).toBe(
+    'run-tests=true\n',
+  );
 });
 
 test('runs all checks on a manual CI dispatch without requiring a full-check input', async () => {
@@ -320,9 +405,19 @@ test.each([
   const marker = '        run: |\n';
   const start = workflow.lastIndexOf(marker);
   if (start < 0) throw new Error('Missing CI result command');
-  const command = workflow.slice(start + marker.length).split('\n').map((line) => line.slice(10)).join('\n');
+  const command = workflow
+    .slice(start + marker.length)
+    .split('\n')
+    .map((line) => line.slice(10))
+    .join('\n');
   const result = exec('bash', ['-e', '-c', command], {
-    env: { ...process.env, RUN_TESTS: String(runTests), CHANGES_RESULT: String(changes), CHECK_RESULT: String(check), KUBERNETES_RESULT: String(kind) },
+    env: {
+      ...process.env,
+      RUN_TESTS: String(runTests),
+      CHANGES_RESULT: String(changes),
+      CHECK_RESULT: String(check),
+      KUBERNETES_RESULT: String(kind),
+    },
   });
   if (success) await expect(result).resolves.toBeDefined();
   else await expect(result).rejects.toThrow();

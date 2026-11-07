@@ -17,7 +17,15 @@ export interface WorkloadTarget {
 
 export class WorkloadError extends Error {
   constructor(
-    readonly code: 'configuration' | 'not-found' | 'unauthorized' | 'forbidden' | 'timeout' | 'read' | 'unsupported' | 'value',
+    readonly code:
+      | 'configuration'
+      | 'not-found'
+      | 'unauthorized'
+      | 'forbidden'
+      | 'timeout'
+      | 'read'
+      | 'unsupported'
+      | 'value',
     message: string,
   ) {
     super(message);
@@ -28,7 +36,10 @@ export class WorkloadError extends Error {
 export function parseWorkloadKind(value: string): WorkloadKind {
   const kind = workloadKinds.find((candidate) => candidate === value);
   if (!kind) {
-    throw new WorkloadError('configuration', `Unsupported workload kind "${value}". Expected ${workloadKinds.join(', ')}.`);
+    throw new WorkloadError(
+      'configuration',
+      `Unsupported workload kind "${value}". Expected ${workloadKinds.join(', ')}.`,
+    );
   }
   return kind;
 }

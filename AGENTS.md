@@ -34,7 +34,7 @@ Keep changes focused on the plugin, its dotenv exporter, and their existing cont
 Use the Node.js version in `.node-version` and pnpm version in `package.json`. Install with `pnpm install --frozen-lockfile`.
 
 - Start with tests that exercise the changed behavior. Rerun successful checks when relevant code or the environment changes, or when a concern remains unresolved.
-- Run `pnpm check` for code changes. It includes type checking, builds, and the default tests.
+- Run `pnpm check` for code changes. It includes Biome lint and format checks, type checking, builds, and the default tests.
 - Run `pnpm test:package` when packaging, dependencies, CLI entry points, or release behavior changes.
 - Run `WORKLOAD_TEST_CONTEXT=kind-varlock-workload pnpm test:cluster` for Kubernetes behavior changes, using a temporary kind cluster.
 - Use a dedicated test kubeconfig and explicit context. Do not run cluster tests against a shared development or production cluster; clean up resources created for the test.
