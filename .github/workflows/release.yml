@@ -2,12 +2,16 @@ name: Release npm
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - README.md
+      - AGENTS.md
+      - 'docs/**'
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   release-please:
-    if: github.event_name == 'push'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     concurrency:
       group: release-please-main
@@ -17,6 +21,9 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
+      # GitHub expressions compare refs without regard to case.
+      - name: Require the exact main ref
+        run: test "$GITHUB_REF" = refs/heads/main
       - name: Create release app token
         id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -29,6 +36,7 @@ jobs:
         id: release
         with:
           token: ${{ steps.app-token.outputs.token }}
+          target-branch: main
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
   dispatch:
@@ -47,11 +55,13 @@ jobs:
             --field "ref=$RELEASE_TAG" --field return_run_details=true --jq '.html_url')
           printf 'Publish workflow: %s\n' "$release_run_url" >> "$GITHUB_STEP_SUMMARY"
   validate:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.release.outputs.sha }}
     steps:
+      - name: Require a tag for npm publication
+        run: test "$GITHUB_REF_TYPE" = tag
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
@@ -68,6 +78,9 @@ jobs:
   verify:
     needs: validate
     uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      pull-requests: read
     with:
       ref: ${{ needs.validate.outputs.sha }}
       full-check: true

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, test } from 'vitest';
 import { createApi } from './api.js';
@@ -12,21 +12,24 @@ test('installs the tarball and checks the release command', async () => {
   const api = await createApi();
   try {
     api.workload('Deployment', [{ name: 'app', env: [{ name: 'PACKAGE_TEST', value: 'installed-tarball' }] }]);
-    const artifacts = join(api.directory, 'artifacts');
-    await mkdir(artifacts);
-    await exec('pnpm', ['pack', '--pack-destination', artifacts], {
-      cwd: root, timeout: 60_000, maxBuffer: 4 * 1024 * 1024,
-    });
+    const packedArtifacts = process.env.WORKLOAD_PACKAGE_ARTIFACTS;
+    const artifacts = packedArtifacts ? resolve(root, packedArtifacts) : join(api.directory, 'artifacts');
+    if (!packedArtifacts) {
+      await mkdir(artifacts);
+      await exec('pnpm', ['pack', '--pack-destination', artifacts], {
+        cwd: root, timeout: 60_000, maxBuffer: 4 * 1024 * 1024,
+      });
+    }
     const tarballs = (await readdir(artifacts)).filter((file) => file.endsWith('.tgz'));
-    expect(tarballs).toHaveLength(1);
-    const tarball = tarballs[0];
-    if (!tarball) throw new Error('Package tarball was not generated.');
+    const [tarball] = tarballs;
+    if (tarballs.length !== 1 || !tarball) throw new Error(`Expected exactly one package tarball in ${artifacts}.`);
+    const tarballPath = join(artifacts, tarball);
 
     const consumer = join(api.directory, 'consumer');
     await mkdir(consumer);
     await writeFile(join(consumer, 'package.json'), JSON.stringify({ private: true }));
     await exec('pnpm', [
-      'add', '-D', join(artifacts, tarball), 'varlock@1.24.0', '--ignore-scripts',
+      'add', '-D', tarballPath, 'varlock@1.24.0', '--ignore-scripts',
       '--store-dir', process.env.WORKLOAD_PNPM_STORE ?? join(api.directory, 'store'),
     ], { cwd: consumer, timeout: 60_000, maxBuffer: 4 * 1024 * 1024 });
 
@@ -52,7 +55,7 @@ test('installs the tarball and checks the release command', async () => {
     expect(api.requests).toHaveLength(1);
     expect(api.requests[0]).toMatchObject({ method: 'GET', path: '/apis/apps/v1/namespaces/test/deployments/app' });
 
-    // Exercise the workflow commands without rewriting their relative tarball paths.
+    // Exercise the workflow commands with a relative tarball path.
     const workflow = await readFile(join(root, '.github/workflows/release.yml'), 'utf8');
     const publishCommands = workflow.split('\n').map((line) => line.trim().replace(/^run:\s*/, ''))
       .filter((line) => /^npm (?:stage )?publish /.test(line));
@@ -64,7 +67,7 @@ test('installs the tarball and checks the release command', async () => {
         cwd: api.directory,
         env: {
           ...process.env, NODE_AUTH_TOKEN: '', GIT_SSH_COMMAND: 'false',
-          RELEASE_TARBALL: `./artifacts/${tarball}`,
+          RELEASE_TARBALL: `./${relative(api.directory, tarballPath)}`,
           TEST_NPM_REGISTRY: api.serverUrl, TEST_NPM_USERCONFIG: npmrc,
           TEST_NPM_CACHE: join(api.directory, 'npm-cache'),
         },

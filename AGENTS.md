@@ -48,7 +48,10 @@ Use the Node.js version in `.node-version` and pnpm version in `package.json`. I
 - Communicate with the user in Korean. Write public documentation, code comments, and commit messages in English.
 - Update the README and affected examples in the same change when resolver arguments, defaults, error behavior, or CLI usage changes. Keep documentation focused and examples generic.
 - Let release-please update release versions and the changelog through its release PR; do not manually bump them unless requested.
-- Keep the `CI result` check running for documentation-only changes. Release callers must set `full-check: true` to bypass path filtering.
+- Keep `CI result` running for documentation-only PRs. Pushes changing only `README.md`, `AGENTS.md`, or `docs/**` skip CI and Release Please.
+- If GitHub's path-filter diff limit omits a CI run, use `gh workflow run ci.yml --ref main` to run the full suite on the current `main`.
+- To process a `Release-As` footer after a filtered or empty push, run `gh workflow run release.yml --ref main`. Dispatch the workflow on a published `vX.Y.Z` tag to retry npm publication.
+- For verified Release Please PRs and their merges, defer full tests to the release tag when only the package version and release metadata change. Release callers must set `full-check: true`.
 - Use the GitHub App token only in the release-please job; keep dispatch authentication and npm OIDC separate.
 - Preserve the release gate: full reusable CI, including kind integration tests, must pass before npm publishing.
 - After a release, verify that the release workflow succeeded and npm serves the intended version. Check that `latest` points to it unless a newer release has already advanced the tag.

@@ -2,7 +2,12 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - README.md
+      - AGENTS.md
+      - 'docs/**'
   pull_request:
+  workflow_dispatch:
   workflow_call:
     inputs:
       full-check:
@@ -15,11 +20,18 @@ on:
         type: string
         required: false
         default: ''
+concurrency:
+  # Re-runs of old commits must not cancel CI for the current PR head.
+  group: ci-${{ github.event_name == 'pull_request' && github.run_attempt == '1' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == '1' }}
 permissions:
   contents: read
 jobs:
   changes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       run-tests: ${{ steps.changes.outputs.run-tests }}
     steps:
@@ -36,6 +48,7 @@ jobs:
         run: node scripts/ci-changes.ts
         env:
           CI_FULL_CHECK: ${{ inputs.full-check || false }}
+          GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
   check:
     needs: changes
     if: needs.changes.outputs.run-tests == 'true'
@@ -53,9 +66,13 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm check
-      - run: pnpm test:package
+      - run: pnpm typecheck
+      # prepack builds dist for both the default tests and the tarball.
       - run: pnpm pack --pack-destination ./artifacts
+      - run: pnpm exec vitest run --project default
+      - run: pnpm test:package
+        env:
+          WORKLOAD_PACKAGE_ARTIFACTS: ./artifacts
       - uses: actions/upload-artifact@v4
         with:
           name: package-node-${{ matrix.node }}
