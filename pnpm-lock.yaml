@@ -20,6 +20,9 @@ importers:
       '@types/node':
         specifier: ^22.18.0
         version: 22.20.5
+      husky:
+        specifier: 9.1.7
+        version: 9.1.7
       tsdown:
         specifier: 0.23.7
         version: 0.23.7(typescript@6.0.3)
@@ -649,6 +652,11 @@ packages:
   hpagent@1.2.0:
     resolution: {integrity: sha512-A91dYTeIB6NoXG+PxTQpCCDDnfHsW9kc06Lvpu1TEe9gnd6ZFeiBoRO9JvzEv6xK7EX97/dUE8g/vBMTqTS3CA==}
     engines: {node: '>=14'}
+
+  husky@9.1.7:
+    resolution: {integrity: sha512-5gs5ytaNjBrh5Ow3zrvdUUY+0VxIuWVL4i9irt6friV+BqdCfmV11CQTWMiBYWHbXhco+J1kHfTOUkePhCDvMA==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   import-without-cache@0.4.1:
     resolution: {integrity: sha512-vXoV9PjKHEednCUu01e98TkImxy67e3BJXbTIOmIq4Hyzw3IAwYRcuPkfeTzJzwyyts4kjuA73x+pWJLc4f86A==}
@@ -1530,6 +1538,8 @@ snapshots:
   hookable@6.1.2: {}
 
   hpagent@1.2.0: {}
+
+  husky@9.1.7: {}
 
   import-without-cache@0.4.1: {}
 

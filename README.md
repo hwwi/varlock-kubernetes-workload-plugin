@@ -282,6 +282,10 @@ pnpm test:package
 
 `check` runs Biome lint and format checks, TypeScript type checking, builds, and tests, including the actual Varlock CLI and Next.js 16.2.6 env loader.
 Use `pnpm format` to format the project's JavaScript and TypeScript files and hand-maintained JSON configuration.
+The development install enables Biome checks on the working tree before commits, including automatic merge commits.
+Errors in unstaged files within Biome's scope can also block a commit.
+If it reports a formatting issue, run `pnpm format` and stage the intended changes again before committing.
+If you already configure a different `core.hooksPath` or use hooks in Git's default directory, review that setup before enabling this repository's hook.
 `test:package` installs a tarball in a separate project and checks the packaged plugin and CLI.
 CI skips tests for changes limited to `README.md`, `AGENTS.md`, and `docs/`; release validation always runs all checks.
 

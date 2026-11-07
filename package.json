@@ -41,6 +41,7 @@
     "typecheck": "tsc --noEmit",
     "test": "pnpm build && vitest run --project default",
     "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test",
+    "prepare": "node scripts/install-hooks.mjs",
     "prepack": "pnpm build",
     "test:cluster": "pnpm build && vitest run --project cluster",
     "test:package": "vitest run --project package"
@@ -53,6 +54,7 @@
     "@kubernetes/client-node": "2.0.2",
     "@next/env": "16.2.6",
     "@types/node": "^22.18.0",
+    "husky": "9.1.7",
     "tsdown": "0.23.7",
     "typescript": "~6.0.0",
     "varlock": "1.24.0",
