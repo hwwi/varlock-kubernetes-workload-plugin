@@ -1,6 +1,6 @@
 {
   "name": "@hwwi/kubernetes-workload-plugin",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0",
   "description": "Varlock plugin for environment variables declared in Kubernetes workload templates",
   "type": "module",
   "license": "MIT",

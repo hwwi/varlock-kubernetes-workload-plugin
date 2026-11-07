@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0](https://github.com/hwwi/varlock-kubernetes-workload-plugin/compare/v0.1.0-beta.2...v0.1.0) (2026-11-07)
+
+
+### Features
+
+* add workload defaults and optional keys ([72cc680](https://github.com/hwwi/varlock-kubernetes-workload-plugin/commit/72cc680fce15a89166e303cb6a0bd1e9c67a513b))
+
 ## [0.1.0-beta.2](https://github.com/hwwi/varlock-kubernetes-workload-plugin/compare/v0.1.0-beta.1...v0.1.0-beta.2) (2026-11-06)
 
 
